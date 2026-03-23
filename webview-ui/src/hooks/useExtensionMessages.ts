@@ -75,6 +75,17 @@ function readExtensionMessage(value: unknown): ExtensionMessage | null {
   return value as ExtensionMessage;
 }
 
+export function subscribeToExtensionMessages(
+  onMessage: (message: ExtensionMessage) => void,
+): () => void {
+  return vscode.onMessage((event) => {
+    const message = readExtensionMessage(event.data);
+    if (message) {
+      onMessage(message);
+    }
+  });
+}
+
 function saveAgentSeats(os: OfficeState): void {
   const seats: Record<number, { palette: number; hueShift: number; seatId: string | null }> = {};
   for (const ch of os.characters.values()) {
@@ -229,12 +240,7 @@ export function useExtensionMessages(
       );
     };
 
-    const handler = (event: { data: unknown }) => {
-      const msg = readExtensionMessage(event.data);
-      if (!msg) {
-        return;
-      }
-
+    const disposeMessageListener = subscribeToExtensionMessages((msg) => {
       const os = getOfficeState();
 
       if (msg.type === 'layoutLoaded') {
@@ -559,8 +565,7 @@ export function useExtensionMessages(
           console.error(`❌ Webview: Error processing furnitureAssetsLoaded:`, err);
         }
       }
-    };
-    const disposeMessageListener = vscode.onMessage(handler);
+    });
     vscode.postMessage({ type: 'webviewReady' });
     return disposeMessageListener;
   }, [getOfficeState]);

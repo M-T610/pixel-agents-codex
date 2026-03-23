@@ -263,37 +263,32 @@ test('preserves the current VS Code bootstrap and update message contract throug
     },
   ]);
 
-  assert.deepEqual(
-    [
-      ...bootstrapAndRuntimeMessages.filter((message) =>
-        ['settingsLoaded', 'wallTilesLoaded', 'existingAgents'].includes(message.type as string),
-      ),
-      ...updateMessages,
-    ],
-    [
-      {
-        type: 'settingsLoaded',
-        soundEnabled: false,
-        externalAssetDirectories: ['C:\\assets', 'D:\\shared-assets'],
+  assert.deepEqual(bootstrapAndRuntimeMessages, [
+    {
+      type: 'settingsLoaded',
+      soundEnabled: false,
+      externalAssetDirectories: ['C:\\assets', 'D:\\shared-assets'],
+    },
+    {
+      type: 'wallTilesLoaded',
+      solidSets,
+      glassSets,
+    },
+    {
+      type: 'existingAgents',
+      agents: [2, 9],
+      agentMeta: {},
+      folderNames: {
+        2: 'workspace-a',
+        9: 'workspace-z',
       },
-      {
-        type: 'wallTilesLoaded',
-        solidSets,
-        glassSets,
-      },
-      {
-        type: 'existingAgents',
-        agents: [2, 9],
-        agentMeta: {},
-        folderNames: {
-          2: 'workspace-a',
-          9: 'workspace-z',
-        },
-      },
-      {
-        type: 'externalAssetDirectoriesUpdated',
-        dirs: ['D:\\shared-assets'],
-      },
-    ],
-  );
+    },
+  ]);
+
+  assert.deepEqual(updateMessages, [
+    {
+      type: 'externalAssetDirectoriesUpdated',
+      dirs: ['D:\\shared-assets'],
+    },
+  ]);
 });
