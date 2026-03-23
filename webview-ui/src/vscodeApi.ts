@@ -105,6 +105,22 @@ export function useHostCapabilities(): HostCapabilitiesSnapshot {
   );
 }
 
+export function postPrimaryAgentFocus({
+  canSelectAgent,
+  agentId,
+  postMessage,
+}: {
+  canSelectAgent: boolean;
+  agentId: number;
+  postMessage: (message: { type: 'focusAgent'; id: number }) => void;
+}): void {
+  if (!canSelectAgent) {
+    return;
+  }
+
+  postMessage({ type: 'focusAgent', id: agentId });
+}
+
 function subscribeToHostCapabilities(listener: () => void): () => void {
   hostCapabilityListeners.add(listener);
   return () => {

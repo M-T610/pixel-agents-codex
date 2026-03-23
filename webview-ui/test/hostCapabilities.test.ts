@@ -7,7 +7,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { BottomToolbar } from '../src/components/BottomToolbar.js';
 import { DebugView } from '../src/components/DebugView.js';
 import { SettingsModal } from '../src/components/SettingsModal.js';
-import { applyHostCapabilitiesMessage, getHostCapabilitiesSnapshot } from '../src/vscodeApi.js';
+import { ToolOverlay } from '../src/office/components/ToolOverlay.js';
+import { CharacterState, Direction } from '../src/office/types.js';
+import {
+  applyHostCapabilitiesMessage,
+  getHostCapabilitiesSnapshot,
+  postPrimaryAgentFocus,
+} from '../src/vscodeApi.js';
 
 function setCapabilities(overrides?: {
   backendCapabilities?: Partial<
@@ -133,4 +139,118 @@ test('disables debug runtime actions when backend select and close are unsupport
     html,
     /<button[^>]*disabled[^>]*title="Closing sessions is unavailable in this host">X<\/button>/,
   );
+});
+
+test('hides the primary overlay close action when backend close is unsupported', () => {
+  setCapabilities({
+    backendCapabilities: {
+      close: false,
+    },
+  });
+
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    devicePixelRatio: 1,
+  } as Window & typeof globalThis;
+  const overlayProps = {
+    officeState: {
+      selectedAgentId: 7,
+      hoveredAgentId: null,
+      characters: new Map([
+        [
+          7,
+          {
+            id: 7,
+            x: 16,
+            y: 16,
+            state: CharacterState.IDLE,
+            dir: Direction.DOWN,
+            tileCol: 0,
+            tileRow: 0,
+            path: [],
+            moveProgress: 0,
+            currentTool: null,
+            palette: 0,
+            hueShift: 0,
+            frame: 0,
+            frameTimer: 0,
+            wanderTimer: 0,
+            wanderCount: 0,
+            wanderLimit: 0,
+            isSubagent: false,
+            parentAgentId: null,
+            isActive: false,
+            seatId: null,
+            bubbleType: null,
+            bubbleTimer: 0,
+            seatTimer: 0,
+            matrixEffect: null,
+            matrixEffectTimer: 0,
+            matrixEffectSeeds: [],
+            folderName: 'Session #7',
+          },
+        ],
+      ]),
+      getLayout() {
+        return {
+          version: 1,
+          cols: 10,
+          rows: 10,
+          tiles: [],
+          furniture: [],
+        };
+      },
+    } as unknown as React.ComponentProps<typeof ToolOverlay>['officeState'],
+    agents: [7],
+    agentTools: {},
+    subagentCharacters: [],
+    containerRef: {
+      current: {
+        getBoundingClientRect() {
+          return {
+            x: 0,
+            y: 0,
+            top: 0,
+            right: 400,
+            bottom: 300,
+            left: 0,
+            width: 400,
+            height: 300,
+            toJSON() {
+              return {};
+            },
+          };
+        },
+      },
+    } as unknown as React.ComponentProps<typeof ToolOverlay>['containerRef'],
+    zoom: 1,
+    panRef: {
+      current: { x: 0, y: 0 },
+    } as unknown as React.ComponentProps<typeof ToolOverlay>['panRef'],
+    onCloseAgent: () => {},
+    alwaysShowOverlay: true,
+    canCloseAgent: false,
+  } satisfies React.ComponentProps<typeof ToolOverlay>;
+
+  try {
+    const html = renderToStaticMarkup(React.createElement(ToolOverlay, overlayProps));
+
+    assert.doesNotMatch(html, /title="Close agent"/);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('suppresses primary focus posts when backend select is unsupported', () => {
+  const postedMessages: unknown[] = [];
+
+  postPrimaryAgentFocus({
+    canSelectAgent: false,
+    agentId: 7,
+    postMessage(message) {
+      postedMessages.push(message);
+    },
+  });
+
+  assert.deepEqual(postedMessages, []);
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import { CHARACTER_SITTING_OFFSET_PX, TOOL_OVERLAY_VERTICAL_OFFSET } from '../../constants.js';
 import type { SubagentCharacter } from '../../hooks/useExtensionMessages.js';
@@ -16,6 +16,7 @@ interface ToolOverlayProps {
   panRef: React.RefObject<{ x: number; y: number }>;
   onCloseAgent: (id: number) => void;
   alwaysShowOverlay: boolean;
+  canCloseAgent: boolean;
 }
 
 /** Derive a short human-readable activity string from tools/status */
@@ -56,6 +57,7 @@ export function ToolOverlay({
   panRef,
   onCloseAgent,
   alwaysShowOverlay,
+  canCloseAgent,
 }: ToolOverlayProps) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -203,7 +205,7 @@ export function ToolOverlay({
                   </span>
                 )}
               </div>
-              {isSelected && !isSub && (
+              {isSelected && !isSub && canCloseAgent && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

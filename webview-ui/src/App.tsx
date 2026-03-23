@@ -15,7 +15,7 @@ import { OfficeState } from './office/engine/officeState.js';
 import { isRotatable } from './office/layout/furnitureCatalog.js';
 import { EditTool } from './office/types.js';
 import { isBrowserRuntime } from './runtime.js';
-import { vscode } from './vscodeApi.js';
+import { postPrimaryAgentFocus, useHostCapabilities, vscode } from './vscodeApi.js';
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null };
@@ -156,6 +156,7 @@ function App() {
 
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [alwaysShowOverlay, setAlwaysShowOverlay] = useState(false);
+  const { backendCapabilities } = useHostCapabilities();
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
   const handleToggleAlwaysShowOverlay = useCallback(
@@ -163,9 +164,16 @@ function App() {
     [],
   );
 
-  const handleSelectAgent = useCallback((id: number) => {
-    vscode.postMessage({ type: 'focusAgent', id });
-  }, []);
+  const handleSelectAgent = useCallback(
+    (id: number) => {
+      postPrimaryAgentFocus({
+        canSelectAgent: backendCapabilities.select,
+        agentId: id,
+        postMessage: vscode.postMessage,
+      });
+    },
+    [backendCapabilities.select],
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -186,13 +194,20 @@ function App() {
     vscode.postMessage({ type: 'closeAgent', id });
   }, []);
 
-  const handleClick = useCallback((agentId: number) => {
-    // If clicked agent is a sub-agent, focus the parent's terminal instead
-    const os = getOfficeState();
-    const meta = os.subagentMeta.get(agentId);
-    const focusId = meta ? meta.parentAgentId : agentId;
-    vscode.postMessage({ type: 'focusAgent', id: focusId });
-  }, []);
+  const handleClick = useCallback(
+    (agentId: number) => {
+      // If clicked agent is a sub-agent, focus the parent's terminal instead
+      const os = getOfficeState();
+      const meta = os.subagentMeta.get(agentId);
+      const focusId = meta ? meta.parentAgentId : agentId;
+      postPrimaryAgentFocus({
+        canSelectAgent: backendCapabilities.select,
+        agentId: focusId,
+        postMessage: vscode.postMessage,
+      });
+    },
+    [backendCapabilities.select],
+  );
 
   const officeState = getOfficeState();
 
@@ -359,6 +374,7 @@ function App() {
           panRef={editor.panRef}
           onCloseAgent={handleCloseAgent}
           alwaysShowOverlay={alwaysShowOverlay}
+          canCloseAgent={backendCapabilities.close}
         />
       )}
 
