@@ -65,11 +65,6 @@ interface ThreadSpawnMeta {
 
 type MessageSink = (message: PixelAgentsEvent) => void;
 
-export interface CodexSessionWatcherHost {
-  revealTranscript?(sessionFile: string): Promise<void> | void;
-  openSessionsFolder?(sessionsRoot: string): Promise<void> | void;
-}
-
 function parseJson<T>(value: string): T | null {
   try {
     return JSON.parse(value) as T;
@@ -160,7 +155,6 @@ export class CodexSessionWatcher {
   constructor(
     private readonly workspacePaths: string[],
     private readonly sink: MessageSink,
-    private readonly host: CodexSessionWatcherHost = {},
   ) {}
 
   async start(): Promise<void> {
@@ -236,21 +230,6 @@ export class CodexSessionWatcher {
     this.sink({ type: 'agentSelected', id: agentId });
   }
 
-  focusAgent(agentId: number): void {
-    const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
-    if (!session || !fs.existsSync(session.sessionFile)) return;
-    this.selectAgent(agentId);
-    if (this.host.revealTranscript) {
-      void Promise.resolve(this.host.revealTranscript(session.sessionFile));
-      return;
-    }
-    void import('vscode').then((vscode) =>
-      vscode.workspace
-        .openTextDocument(session.sessionFile)
-        .then((document) => vscode.window.showTextDocument(document, { preview: false })),
-    );
-  }
-
   hideAgent(agentId: number): void {
     const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
     if (!session) return;
@@ -270,19 +249,17 @@ export class CodexSessionWatcher {
     this.sink({ type: 'agentClosed', id: agentId });
   }
 
-  openSessionsFolder(): void {
-    if (!fs.existsSync(this.sessionsRoot)) {
-      return;
+  getSessionFileForAgent(agentId: number): string | undefined {
+    const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
+    if (!session || !fs.existsSync(session.sessionFile)) {
+      return undefined;
     }
 
-    if (this.host.openSessionsFolder) {
-      void Promise.resolve(this.host.openSessionsFolder(this.sessionsRoot));
-      return;
-    }
+    return session.sessionFile;
+  }
 
-    void import('vscode').then((vscode) =>
-      vscode.env.openExternal(vscode.Uri.file(this.sessionsRoot)),
-    );
+  getSessionsRoot(): string {
+    return this.sessionsRoot;
   }
 
   private emitRootSnapshot(session: RootSessionState): void {

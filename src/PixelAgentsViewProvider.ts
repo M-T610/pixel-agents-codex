@@ -76,6 +76,26 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     >(WORKSPACE_KEY_AGENT_SEATS, {});
   }
 
+  private async revealCodexTranscript(agentId: number): Promise<void> {
+    const sessionFile = this.ensureCodexWatcher().getSessionFileForAgent(agentId);
+    if (!sessionFile) {
+      return;
+    }
+
+    this.ensureCodexWatcher().selectAgent(agentId);
+    const document = await vscode.workspace.openTextDocument(sessionFile);
+    await vscode.window.showTextDocument(document, { preview: false });
+  }
+
+  private openCodexSessionsFolder(): void {
+    const sessionsRoot = this.ensureCodexWatcher().getSessionsRoot();
+    if (!fs.existsSync(sessionsRoot)) {
+      return;
+    }
+
+    void vscode.env.openExternal(vscode.Uri.file(sessionsRoot));
+  }
+
   resolveWebviewView(webviewView: vscode.WebviewView) {
     this.webviewView = webviewView;
     webviewView.webview.options = { enableScripts: true };
@@ -83,9 +103,9 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message.type === 'openCodexSessions') {
-        this.ensureCodexWatcher().openSessionsFolder();
+        this.openCodexSessionsFolder();
       } else if (message.type === 'focusAgent') {
-        this.ensureCodexWatcher().focusAgent(message.id as number);
+        await this.revealCodexTranscript(message.id as number);
       } else if (message.type === 'closeAgent') {
         this.ensureCodexWatcher().hideAgent(message.id as number);
       } else if (message.type === 'saveAgentSeats') {
