@@ -368,6 +368,9 @@ test('standalone host boots with codex runtime and emits current ui-compatible s
           selectAgent() {
             throw new Error('session selection should remain client-local in standalone');
           },
+          getSessionTranscriptPath() {
+            return null;
+          },
           hideAgent() {},
           dispose() {},
         }),
