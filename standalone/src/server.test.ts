@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import * as codexRuntimeAdapterModule from '../../src/runtime/CodexRuntimeAdapter.js';
 import {
+  StandaloneServer,
   StandaloneClientSession,
   createStandaloneBootstrapMessages,
   translateRuntimeEventToWebviewMessages,
   type StandaloneHostMessage,
+  type StandaloneBootstrapMessage,
 } from './server.js';
+import { StandaloneHostChrome } from './standaloneHostChrome.js';
+import { WorkspaceScopeStore } from './workspaceScopeStore.js';
+
+const CodexRuntimeAdapter = codexRuntimeAdapterModule.default.CodexRuntimeAdapter;
 
 test('serves bootstrap in the required order using translated webview messages', () => {
   const messages = createStandaloneBootstrapMessages({
@@ -197,3 +204,180 @@ test('queues browser commands until bootstrap completes for the connection', () 
     { type: 'focusAgent', id: 9 },
   ]);
 });
+
+test('standalone host boots with codex runtime and emits current ui-compatible snapshot', async (t) => {
+  const workspacePath = 'C:\\workspace-a';
+  const furnitureCatalog = [
+    {
+      id: 'desk',
+      name: 'Desk',
+      label: 'Desk',
+      category: 'desks',
+      file: 'desk.png',
+      width: 1,
+      height: 1,
+      footprintW: 1,
+      footprintH: 1,
+      isDesk: true,
+      canPlaceOnWalls: false,
+    },
+  ];
+  const furnitureSprites = new Map<string, string[][]>([['desk', [['pixel']]]]);
+
+  let runtimeWorkspacePaths: string[] = [];
+
+  const server = new StandaloneServer({
+    hostChrome: new StandaloneHostChrome({
+      layout: {
+        version: 1,
+        tiles: [],
+      },
+    }),
+    workspaceScopeStore: new WorkspaceScopeStore({
+      initialScopes: [{ name: 'workspace-a', path: workspacePath }],
+    }),
+    assets: [
+      {
+        type: 'assets_loaded',
+        furniture: {
+          catalog: furnitureCatalog,
+          sprites: furnitureSprites,
+        },
+      },
+    ],
+    runtimeFactory: ({ workspacePaths, terminalHost }) => {
+      runtimeWorkspacePaths = workspacePaths;
+      return new CodexRuntimeAdapter({
+        workspacePaths,
+        terminalHost,
+        createWatcher: (listener) => ({
+          async start() {},
+          postSnapshot() {
+            listener({
+              type: 'existingAgents',
+              agents: [7],
+              agentMeta: {
+                7: {
+                  palette: 2,
+                  seatId: 'seat-a',
+                },
+              },
+              folderNames: {
+                7: 'workspace-a',
+              },
+            });
+          },
+          selectAgent() {
+            throw new Error('session selection should remain client-local in standalone');
+          },
+          hideAgent() {},
+          dispose() {},
+        }),
+      });
+    },
+  });
+
+  await server.start();
+  t.after(async () => {
+    await server.stop();
+  });
+
+  assert.deepEqual(runtimeWorkspacePaths, [workspacePath]);
+  assert.ok(server.port !== null);
+
+  const bootstrapMessages = await connectAndReadBootstrap(server.port);
+
+  assert.deepEqual(
+    bootstrapMessages.map((message) => message.step),
+    ['capabilities', 'settings', 'scopes', 'assets', 'layout', 'sessions_snapshot'],
+  );
+
+  const capabilitiesStep = bootstrapMessages.find((message) => message.step === 'capabilities');
+  assert.deepEqual(capabilitiesStep?.payload.messages, [
+    {
+      type: 'hostCapabilitiesLoaded',
+      backendCapabilities: {
+        observe: true,
+        launch: true,
+        select: false,
+        close: true,
+      },
+      hostCapabilities: {
+        revealTranscript: false,
+        revealSessionsRoot: false,
+        importLayout: false,
+        exportLayout: false,
+        pickAssetDirectory: false,
+      },
+    },
+  ]);
+
+  const assetsStep = bootstrapMessages.find((message) => message.step === 'assets');
+  assert.deepEqual(assetsStep?.payload.messages, [
+    {
+      type: 'furnitureAssetsLoaded',
+      catalog: furnitureCatalog,
+      sprites: {
+        desk: [['pixel']],
+      },
+    },
+  ]);
+
+  const sessionsStep = bootstrapMessages.find((message) => message.step === 'sessions_snapshot');
+  assert.deepEqual(sessionsStep?.payload.messages, [
+    {
+      type: 'existingAgents',
+      agents: [7],
+      agentMeta: {
+        7: {
+          palette: 2,
+          seatId: 'seat-a',
+        },
+      },
+      folderNames: {
+        7: 'workspace-a',
+      },
+    },
+  ]);
+});
+
+async function connectAndReadBootstrap(port: number): Promise<StandaloneBootstrapMessage[]> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port.toString()}/__pixel_agents_host`);
+
+  return await new Promise<StandaloneBootstrapMessage[]>((resolve, reject) => {
+    const bootstrapMessages: StandaloneBootstrapMessage[] = [];
+
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error('Timed out waiting for standalone bootstrap'));
+    }, 5000);
+
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ kind: 'command', command: { type: 'webviewReady' } }));
+    });
+
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data)) as StandaloneHostMessage;
+      if (message.kind !== 'bootstrap') {
+        return;
+      }
+
+      bootstrapMessages.push(message);
+      if (message.step === 'sessions_snapshot') {
+        socket.send(JSON.stringify({ kind: 'bootstrap_complete' }));
+        clearTimeout(timeout);
+        socket.close();
+        resolve(bootstrapMessages);
+      }
+    });
+
+    socket.addEventListener('error', (event) => {
+      clearTimeout(timeout);
+      reject(event);
+    });
+
+    socket.addEventListener('close', () => {
+      clearTimeout(timeout);
+    });
+  });
+}

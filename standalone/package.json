@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node ../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json && node ../node_modules/tsx/dist/cli.mjs --test src/server.test.ts"
+    "build": "node ../node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "start": "node ../node_modules/tsx/dist/cli.mjs src/server.ts",
+    "test": "npm run build && node ../node_modules/tsx/dist/cli.mjs --test src/server.test.ts"
   }
 }

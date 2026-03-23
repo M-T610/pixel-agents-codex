@@ -19,7 +19,7 @@ export const vscode: {
   onMessage<T = unknown>(listener: MessageListener<T>): () => void;
 } = isBrowserRuntime
   ? {
-      postMessage: (msg: unknown) => console.log('[vscode.postMessage]', msg),
+      postMessage: () => {},
       onMessage: addWindowMessageListener,
     }
   : {

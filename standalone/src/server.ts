@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   createServer,
@@ -8,7 +9,7 @@ import {
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as webviewMessageBridge from '../../src/host/webviewMessageBridge.js';
 import type {
@@ -21,6 +22,8 @@ import type {
   PixelAgentsEvent,
   PixelAgentsRuntimeAdapter,
 } from '../../src/runtime/contracts.js';
+import * as codexRuntimeAdapterModule from '../../src/runtime/CodexRuntimeAdapter.js';
+import type { CodexTerminalHost } from '../../src/codexTerminal.js';
 import {
   StandaloneHostChrome,
   readStandaloneBrowserCommand,
@@ -42,6 +45,13 @@ const sharedBridge = (
 };
 
 const { normalizeRuntimeEventToHostEvents, renderHostEventsToWebviewMessages } = sharedBridge;
+const CodexRuntimeAdapter = (
+  'default' in codexRuntimeAdapterModule &&
+  codexRuntimeAdapterModule.default &&
+  typeof codexRuntimeAdapterModule.default === 'object'
+    ? codexRuntimeAdapterModule.default.CodexRuntimeAdapter
+    : undefined
+) as typeof import('../../src/runtime/CodexRuntimeAdapter.js').CodexRuntimeAdapter;
 
 export type WebviewMessage = Record<string, unknown>;
 
@@ -96,6 +106,10 @@ export interface StandaloneBootstrapState {
 export interface StandaloneServerOptions {
   port?: number;
   runtime?: PixelAgentsRuntimeAdapter;
+  runtimeFactory?: (options: {
+    workspacePaths: string[];
+    terminalHost: CodexTerminalHost;
+  }) => PixelAgentsRuntimeAdapter;
   hostChrome?: StandaloneHostChrome;
   workspaceScopeStore?: WorkspaceScopeStore;
   assets?: HostToWebviewEvent[];
@@ -253,6 +267,7 @@ export class StandaloneServer {
     close: false,
   };
   private httpServer: HttpServer | null = null;
+  private runtime: PixelAgentsRuntimeAdapter | null = null;
 
   constructor(private readonly options: StandaloneServerOptions = {}) {
     this.hostChrome = options.hostChrome ?? new StandaloneHostChrome();
@@ -292,7 +307,8 @@ export class StandaloneServer {
     }
     this.clientConnections.clear();
 
-    this.options.runtime?.dispose();
+    this.runtime?.dispose();
+    this.runtime = null;
 
     if (!this.httpServer) {
       return;
@@ -318,7 +334,7 @@ export class StandaloneServer {
   }
 
   private async attachRuntime(): Promise<void> {
-    const runtime = this.options.runtime;
+    const runtime = await this.getRuntime();
     if (!runtime) {
       return;
     }
@@ -340,7 +356,8 @@ export class StandaloneServer {
       bufferedHostEvents.push(...hostEvents);
     });
 
-    this.backendCapabilities = bootstrap.backendCapabilities;
+    this.backendCapabilities = toStandaloneBackendCapabilities(bootstrap.backendCapabilities);
+    await waitForImmediate();
     for (const hostEvent of bufferedHostEvents) {
       this.applySessionProjection(hostEvent);
     }
@@ -544,18 +561,12 @@ export class StandaloneServer {
   }
 
   private async dispatchRuntimeCommand(command: StandaloneBrowserCommand): Promise<boolean> {
-    const runtime = this.options.runtime;
+    const runtime = await this.getRuntime();
     if (!runtime) {
       return false;
     }
 
     switch (command.type) {
-      case 'focusAgent':
-        await runtime.dispatch({
-          type: 'select_session',
-          id: command.id,
-        });
-        return true;
       case 'closeAgent':
         await runtime.dispatch({
           type: 'close_session',
@@ -572,6 +583,32 @@ export class StandaloneServer {
       default:
         return false;
     }
+  }
+
+  private async getRuntime(): Promise<PixelAgentsRuntimeAdapter | null> {
+    if (this.runtime) {
+      return this.runtime;
+    }
+
+    if (this.options.runtime) {
+      this.runtime = this.options.runtime;
+      return this.runtime;
+    }
+
+    const workspacePaths = (await this.workspaceScopeStore.list()).map((scope) => scope.path);
+    const runtimeFactory =
+      this.options.runtimeFactory ??
+      ((options: { workspacePaths: string[]; terminalHost: CodexTerminalHost }) =>
+        new CodexRuntimeAdapter({
+          workspacePaths: options.workspacePaths,
+          terminalHost: options.terminalHost,
+        }));
+
+    this.runtime = runtimeFactory({
+      workspacePaths,
+      terminalHost: createDetachedTerminalHost(),
+    });
+    return this.runtime;
   }
 }
 
@@ -622,6 +659,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function toStandaloneBackendCapabilities(
+  backendCapabilities: BackendCapabilities,
+): BackendCapabilities {
+  return {
+    ...backendCapabilities,
+    select: false,
+  };
+}
+
 function getWebRootPath(): string {
   return path.resolve(getStandaloneDirectory(), '..', '..', 'dist', 'webview');
 }
@@ -632,6 +678,81 @@ function getHostBridgePath(): string {
 
 function getStandaloneDirectory(): string {
   return path.dirname(fileURLToPath(import.meta.url));
+}
+
+function createDefaultWorkspaceScopeStore(): WorkspaceScopeStore {
+  return new WorkspaceScopeStore({
+    initialScopes: readWorkspaceScopesFromEnv(),
+    filePath: path.resolve(getStandaloneDirectory(), '..', 'workspace-scopes.json'),
+  });
+}
+
+function readWorkspaceScopesFromEnv(): WorkspaceScope[] {
+  const rawScopes = process.env.PIXEL_AGENTS_WORKSPACES ?? process.env.PIXEL_AGENTS_WORKSPACE;
+  if (!rawScopes) {
+    return [];
+  }
+
+  return rawScopes
+    .split(path.delimiter)
+    .map((workspacePath) => workspacePath.trim())
+    .filter((workspacePath) => workspacePath.length > 0)
+    .map((workspacePath) => ({
+      name: path.basename(workspacePath),
+      path: workspacePath,
+    }));
+}
+
+function isDirectExecution(importMetaUrl: string): boolean {
+  return !!process.argv[1] && pathToFileURL(process.argv[1]).href === importMetaUrl;
+}
+
+async function runStandaloneCli(): Promise<void> {
+  const server = await startStandaloneServer({
+    workspaceScopeStore: createDefaultWorkspaceScopeStore(),
+  });
+
+  const stopServer = async () => {
+    await server.stop();
+    process.exit(0);
+  };
+
+  process.once('SIGINT', () => {
+    void stopServer();
+  });
+  process.once('SIGTERM', () => {
+    void stopServer();
+  });
+
+  console.log(
+    `[Standalone] listening on http://127.0.0.1:${server.port?.toString() ?? 'unknown-port'}`,
+  );
+}
+
+function createDetachedTerminalHost(): CodexTerminalHost {
+  return {
+    getTerminalNames() {
+      return [];
+    },
+    createTerminal(options) {
+      return {
+        show() {},
+        sendText(command) {
+          const child = spawn(command, {
+            cwd: options.cwd,
+            detached: true,
+            shell: true,
+            stdio: 'ignore',
+          });
+          child.unref();
+        },
+      };
+    },
+  };
+}
+
+function waitForImmediate(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 class SimpleWebSocketConnection {
@@ -766,4 +887,8 @@ class SimpleWebSocketConnection {
     }
     this.closeListeners.clear();
   }
+}
+
+if (isDirectExecution(import.meta.url)) {
+  void runStandaloneCli();
 }
