@@ -10,6 +10,11 @@ import path from 'node:path';
 import { Duplex } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
+import * as webviewMessageBridge from '../../src/host/webviewMessageBridge.js';
+import type {
+  HostToWebviewEvent,
+  SessionSnapshotEntry,
+} from '../../src/host/webviewMessageBridge.js';
 import type {
   BackendCapabilities,
   HostCapabilities,
@@ -18,105 +23,51 @@ import type {
 } from '../../src/runtime/contracts.js';
 import {
   StandaloneHostChrome,
+  readStandaloneBrowserCommand,
   type StandaloneBrowserCommand,
-  type StandaloneChromeEvent,
   type StandaloneHostSettings,
   type StandaloneLayout,
 } from './standaloneHostChrome.js';
 import { WorkspaceScopeStore, type WorkspaceScope } from './workspaceScopeStore.js';
 
-export interface SessionSnapshotEntry {
-  id: number;
-  palette?: number;
-  hueShift?: number;
-  seatId?: string;
-  folderName?: string;
+const sharedBridge = (
+  'default' in webviewMessageBridge &&
+  webviewMessageBridge.default &&
+  typeof webviewMessageBridge.default === 'object'
+    ? webviewMessageBridge.default
+    : webviewMessageBridge
+) as {
+  normalizeRuntimeEventToHostEvents(event: PixelAgentsEvent): HostToWebviewEvent[];
+  renderHostEventsToWebviewMessages(events: HostToWebviewEvent[]): WebviewMessage[];
+};
+
+const { normalizeRuntimeEventToHostEvents, renderHostEventsToWebviewMessages } = sharedBridge;
+
+export type WebviewMessage = Record<string, unknown>;
+
+export type StandaloneBootstrapStep =
+  | 'capabilities'
+  | 'settings'
+  | 'scopes'
+  | 'assets'
+  | 'layout'
+  | 'sessions_snapshot';
+
+export interface StandaloneBootstrapPayload {
+  messages: WebviewMessage[];
 }
 
-export interface StandaloneAssetsPayload {
-  characters?: unknown | null;
-  floors?: unknown | null;
-  walls?: {
-    solidSets: unknown;
-    glassSets: unknown;
-  } | null;
-  furniture?: {
-    catalog: unknown[];
-    sprites: Map<string, unknown> | Record<string, unknown>;
-  } | null;
-}
-
-export type StandaloneHostEvent =
-  | StandaloneChromeEvent
-  | { type: 'workspace_folders_loaded'; folders: WorkspaceScope[] }
-  | {
-      type: 'assets_loaded';
-      characters?: unknown | null;
-      floors?: unknown | null;
-      walls?: StandaloneAssetsPayload['walls'];
-      furniture?: StandaloneAssetsPayload['furniture'];
-    }
-  | { type: 'sessions_snapshot'; sessions: SessionSnapshotEntry[] }
-  | { type: 'session_discovered'; id: number; folderName?: string }
-  | { type: 'session_closed'; id: number }
-  | { type: 'session_selected'; id: number }
-  | { type: 'status_changed'; id: number; status: string }
-  | { type: 'tool_started'; id: number; toolId: string; status: string; parentToolId?: string }
-  | { type: 'tool_finished'; id: number; toolId: string; parentToolId?: string }
-  | { type: 'tools_cleared'; id: number }
-  | { type: 'permission_requested'; id: number; parentToolId?: string }
-  | { type: 'permission_cleared'; id: number }
-  | { type: 'subagent_finished'; id: number; parentToolId: string };
-
-export type StandaloneBootstrapMessage =
-  | {
-      kind: 'bootstrap';
-      step: 'capabilities';
-      payload: {
-        backendCapabilities: BackendCapabilities;
-        hostCapabilities: HostCapabilities;
-      };
-    }
-  | {
-      kind: 'bootstrap';
-      step: 'settings';
-      payload: StandaloneHostSettings;
-    }
-  | {
-      kind: 'bootstrap';
-      step: 'scopes';
-      payload: {
-        folders: WorkspaceScope[];
-      };
-    }
-  | {
-      kind: 'bootstrap';
-      step: 'assets';
-      payload: {
-        events: StandaloneHostEvent[];
-      };
-    }
-  | {
-      kind: 'bootstrap';
-      step: 'layout';
-      payload: {
-        layout: StandaloneLayout | null;
-        wasReset: boolean;
-      };
-    }
-  | {
-      kind: 'bootstrap';
-      step: 'sessions_snapshot';
-      payload: {
-        sessions: SessionSnapshotEntry[];
-      };
-    };
+export type StandaloneBootstrapMessage = {
+  kind: 'bootstrap';
+  step: StandaloneBootstrapStep;
+  payload: StandaloneBootstrapPayload;
+};
 
 export type StandaloneHostMessage =
   | StandaloneBootstrapMessage
   | {
-      kind: 'event';
-      event: StandaloneHostEvent;
+      kind: 'webview_messages';
+      messages: WebviewMessage[];
     }
   | {
       kind: 'error';
@@ -137,7 +88,7 @@ export interface StandaloneBootstrapState {
   hostCapabilities: HostCapabilities;
   settings: StandaloneHostSettings;
   scopes: WorkspaceScope[];
-  assets: StandaloneHostEvent[];
+  assets: HostToWebviewEvent[];
   layout: StandaloneLayout | null;
   sessions: SessionSnapshotEntry[];
 }
@@ -147,7 +98,7 @@ export interface StandaloneServerOptions {
   runtime?: PixelAgentsRuntimeAdapter;
   hostChrome?: StandaloneHostChrome;
   workspaceScopeStore?: WorkspaceScopeStore;
-  assets?: StandaloneHostEvent[];
+  assets?: HostToWebviewEvent[];
 }
 
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -166,55 +117,64 @@ export function createStandaloneBootstrapMessages(
   state: StandaloneBootstrapState,
 ): StandaloneBootstrapMessage[] {
   return [
-    {
-      kind: 'bootstrap',
-      step: 'capabilities',
-      payload: {
+    createBootstrapStepMessage('capabilities', [
+      {
+        type: 'hostCapabilitiesLoaded',
         backendCapabilities: state.backendCapabilities,
         hostCapabilities: state.hostCapabilities,
       },
-    },
-    {
-      kind: 'bootstrap',
-      step: 'settings',
-      payload: state.settings,
-    },
-    {
-      kind: 'bootstrap',
-      step: 'scopes',
-      payload: {
-        folders: state.scopes,
-      },
-    },
-    {
-      kind: 'bootstrap',
-      step: 'assets',
-      payload: {
-        events: state.assets,
-      },
-    },
-    {
-      kind: 'bootstrap',
-      step: 'layout',
-      payload: {
-        layout: state.layout,
-        wasReset: false,
-      },
-    },
-    {
-      kind: 'bootstrap',
-      step: 'sessions_snapshot',
-      payload: {
-        sessions: state.sessions,
-      },
-    },
+    ]),
+    createBootstrapStepMessage(
+      'settings',
+      renderHostEventsToWebviewMessages([
+        {
+          type: 'settings_changed',
+          soundEnabled: state.settings.soundEnabled,
+          externalAssetDirectories: state.settings.externalAssetDirectories,
+        },
+      ]),
+    ),
+    createBootstrapStepMessage(
+      'scopes',
+      renderHostEventsToWebviewMessages([
+        {
+          type: 'workspace_folders_loaded',
+          folders: state.scopes,
+        },
+      ]),
+    ),
+    createBootstrapStepMessage('assets', renderHostEventsToWebviewMessages(state.assets)),
+    createBootstrapStepMessage(
+      'layout',
+      renderHostEventsToWebviewMessages([
+        {
+          type: 'layout_changed',
+          layout: state.layout,
+          wasReset: false,
+        },
+      ]),
+    ),
+    createBootstrapStepMessage(
+      'sessions_snapshot',
+      renderHostEventsToWebviewMessages([
+        {
+          type: 'sessions_snapshot',
+          sessions: state.sessions,
+        },
+      ]),
+    ),
   ];
+}
+
+export function translateRuntimeEventToWebviewMessages(event: PixelAgentsEvent): WebviewMessage[] {
+  return renderHostEventsToWebviewMessages(normalizeRuntimeEventToHostEvents(event));
 }
 
 export class StandaloneClientSession {
   private bootstrapSent = false;
   private bootstrapCompleted = false;
-  private readonly bufferedMessages: StandaloneHostMessage[] = [];
+  private readonly bufferedHostMessages: StandaloneHostMessage[] = [];
+  private readonly bufferedCommands: StandaloneBrowserCommand[] = [];
 
   constructor(private readonly deliver: (message: StandaloneHostMessage) => void) {}
 
@@ -229,39 +189,58 @@ export class StandaloneClientSession {
     }
   }
 
-  enqueueRuntimeEvent(event: StandaloneHostEvent): void {
-    const message: StandaloneHostMessage = {
-      kind: 'event',
-      event,
+  enqueueWebviewMessages(messages: WebviewMessage[]): void {
+    if (messages.length === 0) {
+      return;
+    }
+
+    const hostMessage: StandaloneHostMessage = {
+      kind: 'webview_messages',
+      messages,
     };
 
     if (!this.bootstrapCompleted) {
-      this.bufferedMessages.push(message);
+      this.bufferedHostMessages.push(hostMessage);
       return;
     }
 
-    this.deliver(message);
+    this.deliver(hostMessage);
   }
 
-  markBootstrapComplete(): void {
+  acceptCommand(command: StandaloneBrowserCommand): StandaloneBrowserCommand[] {
+    if (command.type === 'webviewReady') {
+      return [command];
+    }
+
+    if (!this.bootstrapCompleted) {
+      this.bufferedCommands.push(command);
+      return [];
+    }
+
+    return [command];
+  }
+
+  markBootstrapComplete(): StandaloneBrowserCommand[] {
     if (this.bootstrapCompleted) {
-      return;
+      return [];
     }
 
     this.bootstrapCompleted = true;
-    while (this.bufferedMessages.length > 0) {
-      const next = this.bufferedMessages.shift();
+    while (this.bufferedHostMessages.length > 0) {
+      const next = this.bufferedHostMessages.shift();
       if (next) {
         this.deliver(next);
       }
     }
+
+    return this.bufferedCommands.splice(0);
   }
 }
 
 export class StandaloneServer {
   private readonly hostChrome: StandaloneHostChrome;
   private readonly workspaceScopeStore: WorkspaceScopeStore;
-  private readonly bootstrapAssets: StandaloneHostEvent[];
+  private readonly bootstrapAssets: HostToWebviewEvent[];
   private readonly clientConnections = new Map<
     SimpleWebSocketConnection,
     StandaloneClientSession
@@ -344,25 +323,26 @@ export class StandaloneServer {
       return;
     }
 
-    const bufferedEvents: StandaloneHostEvent[] = [];
+    const bufferedHostEvents: HostToWebviewEvent[] = [];
     let runtimeUnlocked = false;
 
     const bootstrap = await runtime.connect((event) => {
       const hostEvents = normalizeRuntimeEventToHostEvents(event);
       for (const hostEvent of hostEvents) {
         this.applySessionProjection(hostEvent);
-        if (runtimeUnlocked) {
-          this.broadcastHostEvent(hostEvent);
-          continue;
-        }
-
-        bufferedEvents.push(hostEvent);
       }
+
+      if (runtimeUnlocked) {
+        this.broadcastHostEvents(hostEvents);
+        return;
+      }
+
+      bufferedHostEvents.push(...hostEvents);
     });
 
     this.backendCapabilities = bootstrap.backendCapabilities;
-    for (const event of bufferedEvents) {
-      this.applySessionProjection(event);
+    for (const hostEvent of bufferedHostEvents) {
+      this.applySessionProjection(hostEvent);
     }
     runtimeUnlocked = true;
   }
@@ -448,7 +428,7 @@ export class StandaloneServer {
 
       const connection = new SimpleWebSocketConnection(socket);
       const clientSession = new StandaloneClientSession((message) => {
-        connection.send(serializeStandaloneHostMessage(message));
+        connection.send(JSON.stringify(message));
       });
       this.clientConnections.set(connection, clientSession);
 
@@ -471,33 +451,44 @@ export class StandaloneServer {
     const message = readStandaloneClientMessage(rawMessage);
     if (!message) {
       connection.send(
-        serializeStandaloneHostMessage({
+        JSON.stringify({
           kind: 'error',
           message: 'Invalid client message.',
-        }),
+        } satisfies StandaloneHostMessage),
       );
       return;
     }
 
     if (message.kind === 'bootstrap_complete') {
-      session.markBootstrapComplete();
+      const queuedCommands = session.markBootstrapComplete();
+      for (const command of queuedCommands) {
+        await this.processCommand(session, command);
+      }
       return;
     }
 
-    if (message.command.type === 'webviewReady') {
+    const acceptedCommands = session.acceptCommand(message.command);
+    for (const command of acceptedCommands) {
+      await this.processCommand(session, command);
+    }
+  }
+
+  private async processCommand(
+    session: StandaloneClientSession,
+    command: StandaloneBrowserCommand,
+  ): Promise<void> {
+    if (command.type === 'webviewReady') {
       session.sendBootstrap(await this.buildBootstrapMessages());
       return;
     }
 
-    if (await this.dispatchRuntimeCommand(message.command)) {
+    if (await this.dispatchRuntimeCommand(command)) {
       return;
     }
 
-    const chromeResult = await this.hostChrome.handleCommand(message.command);
+    const chromeResult = await this.hostChrome.handleCommand(command);
     if (chromeResult.events.length > 0) {
-      for (const event of chromeResult.events) {
-        this.broadcastHostEvent(event);
-      }
+      this.broadcastHostEvents(chromeResult.events);
     }
   }
 
@@ -517,7 +508,7 @@ export class StandaloneServer {
     return [...this.sessionProjection.values()].sort((left, right) => left.id - right.id);
   }
 
-  private applySessionProjection(event: StandaloneHostEvent): void {
+  private applySessionProjection(event: HostToWebviewEvent): void {
     switch (event.type) {
       case 'sessions_snapshot':
         this.sessionProjection.clear();
@@ -537,10 +528,18 @@ export class StandaloneServer {
     }
   }
 
-  private broadcastHostEvent(event: StandaloneHostEvent): void {
-    this.applySessionProjection(event);
+  private broadcastHostEvents(events: HostToWebviewEvent[]): void {
+    if (events.length === 0) {
+      return;
+    }
+
+    for (const event of events) {
+      this.applySessionProjection(event);
+    }
+
+    const messages = renderHostEventsToWebviewMessages(events);
     for (const session of this.clientConnections.values()) {
-      session.enqueueRuntimeEvent(event);
+      session.enqueueWebviewMessages(messages);
     }
   }
 
@@ -566,7 +565,7 @@ export class StandaloneServer {
       case 'startCodexSession':
         await runtime.dispatch({
           type: 'launch_session',
-          cwd: typeof command.cwd === 'string' ? command.cwd : undefined,
+          cwd: command.cwd,
           bypassPermissions: command.bypassPermissions === true,
         });
         return true;
@@ -584,171 +583,33 @@ export async function startStandaloneServer(
   return server;
 }
 
-function normalizeRuntimeEventToHostEvents(event: PixelAgentsEvent): StandaloneHostEvent[] {
-  switch (event.type) {
-    case 'existingAgents':
-      return [
-        {
-          type: 'sessions_snapshot',
-          sessions: normalizeSessionsSnapshot(
-            readNumberArray(event.agents),
-            readAgentMeta(event.agentMeta),
-            readFolderNames(event.folderNames),
-          ),
-        },
-      ];
-    case 'agentCreated':
-      return [
-        {
-          type: 'session_discovered',
-          id: requireNumber(event.id, event.type, 'id'),
-          folderName: readOptionalString(event.folderName),
-        },
-      ];
-    case 'agentClosed':
-      return [
-        {
-          type: 'session_closed',
-          id: requireNumber(event.id, event.type, 'id'),
-        },
-      ];
-    case 'agentSelected':
-      return [
-        {
-          type: 'session_selected',
-          id: requireNumber(event.id, event.type, 'id'),
-        },
-      ];
-    case 'agentStatus':
-      return [
-        {
-          type: 'status_changed',
-          id: requireNumber(event.id, event.type, 'id'),
-          status: requireString(event.status, event.type, 'status'),
-        },
-      ];
-    case 'agentToolStart':
-      return [
-        {
-          type: 'tool_started',
-          id: requireNumber(event.id, event.type, 'id'),
-          toolId: requireString(event.toolId, event.type, 'toolId'),
-          status: requireString(event.status, event.type, 'status'),
-        },
-      ];
-    case 'agentToolDone':
-      return [
-        {
-          type: 'tool_finished',
-          id: requireNumber(event.id, event.type, 'id'),
-          toolId: requireString(event.toolId, event.type, 'toolId'),
-        },
-      ];
-    case 'agentToolsClear':
-      return [
-        {
-          type: 'tools_cleared',
-          id: requireNumber(event.id, event.type, 'id'),
-        },
-      ];
-    case 'subagentToolStart':
-      return [
-        {
-          type: 'tool_started',
-          id: requireNumber(event.id, event.type, 'id'),
-          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
-          toolId: requireString(event.toolId, event.type, 'toolId'),
-          status: requireString(event.status, event.type, 'status'),
-        },
-      ];
-    case 'subagentToolDone':
-      return [
-        {
-          type: 'tool_finished',
-          id: requireNumber(event.id, event.type, 'id'),
-          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
-          toolId: requireString(event.toolId, event.type, 'toolId'),
-        },
-      ];
-    case 'subagentClear':
-      return [
-        {
-          type: 'subagent_finished',
-          id: requireNumber(event.id, event.type, 'id'),
-          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
-        },
-      ];
-    case 'agentToolPermission':
-      return [
-        {
-          type: 'permission_requested',
-          id: requireNumber(event.id, event.type, 'id'),
-        },
-      ];
-    case 'subagentToolPermission':
-      return [
-        {
-          type: 'permission_requested',
-          id: requireNumber(event.id, event.type, 'id'),
-          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
-        },
-      ];
-    case 'agentToolPermissionClear':
-      return [
-        {
-          type: 'permission_cleared',
-          id: requireNumber(event.id, event.type, 'id'),
-        },
-      ];
-    default:
-      return [];
-  }
-}
-
-function serializeStandaloneHostMessage(message: StandaloneHostMessage): string {
-  return JSON.stringify(makeJsonCompatible(message));
-}
-
-function makeJsonCompatible<T>(value: T): unknown {
-  if (value instanceof Map) {
-    return Object.fromEntries(
-      [...value.entries()].map(([key, entryValue]) => [key, makeJsonCompatible(entryValue)]),
-    );
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => makeJsonCompatible(entry));
-  }
-
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => [
-        key,
-        makeJsonCompatible(entryValue),
-      ]),
-    );
-  }
-
-  return value;
+function createBootstrapStepMessage(
+  step: StandaloneBootstrapStep,
+  messages: WebviewMessage[],
+): StandaloneBootstrapMessage {
+  return {
+    kind: 'bootstrap',
+    step,
+    payload: {
+      messages,
+    },
+  };
 }
 
 function readStandaloneClientMessage(rawMessage: string): StandaloneClientMessage | null {
   try {
     const parsed = JSON.parse(rawMessage) as unknown;
-    if (!parsed || typeof parsed !== 'object') {
+    if (!isRecord(parsed)) {
       return null;
     }
 
-    const kind = (parsed as { kind?: unknown }).kind;
-    if (kind === 'bootstrap_complete') {
+    if (parsed.kind === 'bootstrap_complete') {
       return { kind: 'bootstrap_complete' };
     }
 
-    if (
-      kind === 'command' &&
-      typeof (parsed as { command?: { type?: unknown } }).command?.type === 'string'
-    ) {
-      return parsed as StandaloneClientMessage;
+    if (parsed.kind === 'command') {
+      const command = readStandaloneBrowserCommand(parsed.command);
+      return command ? { kind: 'command', command } : null;
     }
 
     return null;
@@ -757,85 +618,7 @@ function readStandaloneClientMessage(rawMessage: string): StandaloneClientMessag
   }
 }
 
-function normalizeSessionsSnapshot(
-  agentIds: number[],
-  agentMeta: Record<number, { palette?: number; hueShift?: number; seatId?: string }>,
-  folderNames: Record<number, string>,
-): SessionSnapshotEntry[] {
-  return agentIds.map((id) => ({
-    id,
-    ...agentMeta[id],
-    ...(folderNames[id] ? { folderName: folderNames[id] } : {}),
-  }));
-}
-
-function readAgentMeta(
-  value: unknown,
-): Record<number, { palette?: number; hueShift?: number; seatId?: string }> {
-  if (!isRecord(value)) {
-    return {};
-  }
-
-  const result: Record<number, { palette?: number; hueShift?: number; seatId?: string }> = {};
-  for (const [rawId, entry] of Object.entries(value)) {
-    const id = Number(rawId);
-    if (!Number.isFinite(id) || !isRecord(entry)) {
-      continue;
-    }
-
-    result[id] = {
-      ...(typeof entry.palette === 'number' ? { palette: entry.palette } : {}),
-      ...(typeof entry.hueShift === 'number' ? { hueShift: entry.hueShift } : {}),
-      ...(typeof entry.seatId === 'string' ? { seatId: entry.seatId } : {}),
-    };
-  }
-
-  return result;
-}
-
-function readFolderNames(value: unknown): Record<number, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-
-  const result: Record<number, string> = {};
-  for (const [rawId, entry] of Object.entries(value)) {
-    const id = Number(rawId);
-    if (Number.isFinite(id) && typeof entry === 'string') {
-      result[id] = entry;
-    }
-  }
-
-  return result;
-}
-
-function readNumberArray(value: unknown): number[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is number => typeof entry === 'number')
-    : [];
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
-
-function requireNumber(value: unknown, eventType: string, field: string): number {
-  if (typeof value !== 'number') {
-    throw new Error(`Runtime event "${eventType}" requires numeric ${field}`);
-  }
-
-  return value;
-}
-
-function requireString(value: unknown, eventType: string, field: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(`Runtime event "${eventType}" requires string ${field}`);
-  }
-
-  return value;
-}
-
-function isRecord(value: unknown): value is Record<string, any> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 

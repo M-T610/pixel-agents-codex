@@ -1,10 +1,5 @@
-export interface HostCapabilities {
-  revealTranscript: boolean;
-  revealSessionsRoot: boolean;
-  importLayout: boolean;
-  exportLayout: boolean;
-  pickAssetDirectory: boolean;
-}
+import type { HostToWebviewEvent } from '../../src/host/webviewMessageBridge.js';
+import type { HostCapabilities } from '../../src/runtime/contracts.js';
 
 export interface StandaloneAgentSeat {
   palette?: number;
@@ -33,13 +28,14 @@ export type StandaloneBrowserCommand =
   | { type: 'addExternalAssetDirectory' }
   | { type: 'removeExternalAssetDirectory'; path: string }
   | { type: 'importLayout' }
-  | { type: 'openCodexSessions' }
-  | { type: string; [key: string]: unknown };
+  | { type: 'openCodexSessions' };
 
-export type StandaloneChromeEvent =
-  | { type: 'settings_changed'; soundEnabled: boolean; externalAssetDirectories: string[] }
-  | { type: 'external_asset_directories_changed'; dirs: string[] }
-  | { type: 'layout_changed'; layout: StandaloneLayout | null; wasReset?: boolean };
+export type StandaloneChromeEvent = Extract<
+  HostToWebviewEvent,
+  | { type: 'settings_changed' }
+  | { type: 'external_asset_directories_changed' }
+  | { type: 'layout_changed' }
+>;
 
 export interface StandaloneHostChromeOptions {
   capabilities?: Partial<HostCapabilities>;
@@ -135,6 +131,60 @@ export class StandaloneHostChrome {
       default:
         return { handled: false, events: [] };
     }
+  }
+}
+
+export function readStandaloneBrowserCommand(value: unknown): StandaloneBrowserCommand | null {
+  if (!isRecord(value) || typeof value.type !== 'string') {
+    return null;
+  }
+
+  switch (value.type) {
+    case 'webviewReady':
+    case 'exportLayout':
+    case 'addExternalAssetDirectory':
+    case 'importLayout':
+    case 'openCodexSessions':
+      return { type: value.type };
+    case 'focusAgent':
+    case 'closeAgent':
+      return typeof value.id === 'number' ? { type: value.type, id: value.id } : null;
+    case 'startCodexSession':
+      return {
+        type: 'startCodexSession',
+        ...(typeof value.cwd === 'string' ? { cwd: value.cwd } : {}),
+        ...(value.bypassPermissions === true ? { bypassPermissions: true } : {}),
+      };
+    case 'saveAgentSeats':
+      return isRecord(value.seats)
+        ? {
+            type: 'saveAgentSeats',
+            seats: value.seats as Record<number, StandaloneAgentSeat>,
+          }
+        : null;
+    case 'saveLayout':
+      return isRecord(value.layout)
+        ? {
+            type: 'saveLayout',
+            layout: value.layout,
+          }
+        : null;
+    case 'setSoundEnabled':
+      return typeof value.enabled === 'boolean'
+        ? {
+            type: 'setSoundEnabled',
+            enabled: value.enabled,
+          }
+        : null;
+    case 'removeExternalAssetDirectory':
+      return typeof value.path === 'string'
+        ? {
+            type: 'removeExternalAssetDirectory',
+            path: value.path,
+          }
+        : null;
+    default:
+      return null;
   }
 }
 

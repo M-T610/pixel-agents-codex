@@ -4,10 +4,11 @@ import test from 'node:test';
 import {
   StandaloneClientSession,
   createStandaloneBootstrapMessages,
+  translateRuntimeEventToWebviewMessages,
   type StandaloneHostMessage,
 } from './server.js';
 
-test('serves bootstrap in the required order', () => {
+test('serves bootstrap in the required order using translated webview messages', () => {
   const messages = createStandaloneBootstrapMessages({
     backendCapabilities: {
       observe: true,
@@ -52,9 +53,37 @@ test('serves bootstrap in the required order', () => {
     messages.map((message) => message.step),
     ['capabilities', 'settings', 'scopes', 'assets', 'layout', 'sessions_snapshot'],
   );
+
+  assert.deepEqual(
+    messages.map((message) => message.payload.messages.map((entry) => entry.type)),
+    [
+      ['hostCapabilitiesLoaded'],
+      ['settingsLoaded'],
+      ['workspaceFolders'],
+      ['furnitureAssetsLoaded'],
+      ['layoutLoaded'],
+      ['existingAgents'],
+    ],
+  );
 });
 
-test('does not forward live runtime events before bootstrap completes', () => {
+test('translates runtime events through the shared webview bridge', () => {
+  const messages = translateRuntimeEventToWebviewMessages({
+    type: 'agentStatus',
+    id: 7,
+    status: 'waiting',
+  });
+
+  assert.deepEqual(messages, [
+    {
+      type: 'agentStatus',
+      id: 7,
+      status: 'waiting',
+    },
+  ]);
+});
+
+test('does not forward live runtime webview messages before bootstrap completes', () => {
   const delivered: StandaloneHostMessage[] = [];
   const session = new StandaloneClientSession((message) => {
     delivered.push(message);
@@ -65,47 +94,59 @@ test('does not forward live runtime events before bootstrap completes', () => {
       kind: 'bootstrap',
       step: 'capabilities',
       payload: {
-        backendCapabilities: {
-          observe: true,
-          launch: false,
-          select: false,
-          close: false,
-        },
-        hostCapabilities: {
-          revealTranscript: false,
-          revealSessionsRoot: false,
-          importLayout: false,
-          exportLayout: false,
-          pickAssetDirectory: false,
-        },
+        messages: [
+          {
+            type: 'hostCapabilitiesLoaded',
+            backendCapabilities: {
+              observe: true,
+              launch: false,
+              select: false,
+              close: false,
+            },
+            hostCapabilities: {
+              revealTranscript: false,
+              revealSessionsRoot: false,
+              importLayout: false,
+              exportLayout: false,
+              pickAssetDirectory: false,
+            },
+          },
+        ],
       },
     },
   ]);
 
-  session.enqueueRuntimeEvent({
-    type: 'status_changed',
-    id: 7,
-    status: 'waiting',
-  });
+  session.enqueueWebviewMessages([
+    {
+      type: 'agentStatus',
+      id: 7,
+      status: 'waiting',
+    },
+  ]);
 
   assert.deepEqual(delivered, [
     {
       kind: 'bootstrap',
       step: 'capabilities',
       payload: {
-        backendCapabilities: {
-          observe: true,
-          launch: false,
-          select: false,
-          close: false,
-        },
-        hostCapabilities: {
-          revealTranscript: false,
-          revealSessionsRoot: false,
-          importLayout: false,
-          exportLayout: false,
-          pickAssetDirectory: false,
-        },
+        messages: [
+          {
+            type: 'hostCapabilitiesLoaded',
+            backendCapabilities: {
+              observe: true,
+              launch: false,
+              select: false,
+              close: false,
+            },
+            hostCapabilities: {
+              revealTranscript: false,
+              revealSessionsRoot: false,
+              importLayout: false,
+              exportLayout: false,
+              pickAssetDirectory: false,
+            },
+          },
+        ],
       },
     },
   ]);
@@ -117,28 +158,42 @@ test('does not forward live runtime events before bootstrap completes', () => {
       kind: 'bootstrap',
       step: 'capabilities',
       payload: {
-        backendCapabilities: {
-          observe: true,
-          launch: false,
-          select: false,
-          close: false,
-        },
-        hostCapabilities: {
-          revealTranscript: false,
-          revealSessionsRoot: false,
-          importLayout: false,
-          exportLayout: false,
-          pickAssetDirectory: false,
-        },
+        messages: [
+          {
+            type: 'hostCapabilitiesLoaded',
+            backendCapabilities: {
+              observe: true,
+              launch: false,
+              select: false,
+              close: false,
+            },
+            hostCapabilities: {
+              revealTranscript: false,
+              revealSessionsRoot: false,
+              importLayout: false,
+              exportLayout: false,
+              pickAssetDirectory: false,
+            },
+          },
+        ],
       },
     },
     {
-      kind: 'event',
-      event: {
-        type: 'status_changed',
-        id: 7,
-        status: 'waiting',
-      },
+      kind: 'webview_messages',
+      messages: [{ type: 'agentStatus', id: 7, status: 'waiting' }],
     },
+  ]);
+});
+
+test('queues browser commands until bootstrap completes for the connection', () => {
+  const session = new StandaloneClientSession(() => {});
+
+  assert.deepEqual(session.acceptCommand({ type: 'webviewReady' }), [{ type: 'webviewReady' }]);
+  assert.deepEqual(session.acceptCommand({ type: 'setSoundEnabled', enabled: false }), []);
+  assert.deepEqual(session.acceptCommand({ type: 'focusAgent', id: 9 }), []);
+
+  assert.deepEqual(session.markBootstrapComplete(), [
+    { type: 'setSoundEnabled', enabled: false },
+    { type: 'focusAgent', id: 9 },
   ]);
 });
