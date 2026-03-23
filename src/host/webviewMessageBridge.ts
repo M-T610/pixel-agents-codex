@@ -23,8 +23,10 @@ export interface SessionSnapshotEntry {
   folderName?: string;
 }
 
+type AgentMetaRecord = Record<number, { palette?: number; hueShift?: number; seatId?: string }>;
+type FolderNamesRecord = Record<number, string>;
+
 export type HostToWebviewEvent =
-  | PixelAgentsEvent
   | {
       type: 'settings_changed';
       soundEnabled: boolean;
@@ -64,6 +66,10 @@ export type HostToWebviewEvent =
       id: number;
     }
   | {
+      type: 'session_selected';
+      id: number;
+    }
+  | {
       type: 'status_changed';
       id: number;
       status: string;
@@ -93,12 +99,6 @@ export type HostToWebviewEvent =
   | {
       type: 'permission_cleared';
       id: number;
-    }
-  | {
-      type: 'subagent_started';
-      id: number;
-      parentToolId: string;
-      label: string;
     }
   | {
       type: 'subagent_finished';
@@ -133,19 +133,18 @@ export function bridgeHostEventToWebviewMessages(
         },
       ];
     case 'assets_loaded': {
-      const assetsEvent = event as Extract<HostToWebviewEvent, { type: 'assets_loaded' }>;
       const messages: Array<Record<string, unknown>> = [];
-      if (assetsEvent.characters) {
-        messages.push(createCharacterSpritesLoadedMessage(assetsEvent.characters));
+      if (event.characters) {
+        messages.push(createCharacterSpritesLoadedMessage(event.characters));
       }
-      if (assetsEvent.floors) {
-        messages.push(createFloorTilesLoadedMessage(assetsEvent.floors));
+      if (event.floors) {
+        messages.push(createFloorTilesLoadedMessage(event.floors));
       }
-      if (assetsEvent.walls) {
-        messages.push(createWallTilesLoadedMessage(assetsEvent.walls));
+      if (event.walls) {
+        messages.push(createWallTilesLoadedMessage(event.walls));
       }
-      if (assetsEvent.furniture) {
-        messages.push(createFurnitureAssetsLoadedMessage(assetsEvent.furniture));
+      if (event.furniture) {
+        messages.push(createFurnitureAssetsLoadedMessage(event.furniture));
       }
       return messages;
     }
@@ -158,11 +157,7 @@ export function bridgeHostEventToWebviewMessages(
         },
       ];
     case 'sessions_snapshot':
-      return [
-        createExistingAgentsMessage(
-          (event as Extract<HostToWebviewEvent, { type: 'sessions_snapshot' }>).sessions,
-        ),
-      ];
+      return [createExistingAgentsMessage(event.sessions)];
     case 'session_discovered':
       return [
         {
@@ -173,6 +168,8 @@ export function bridgeHostEventToWebviewMessages(
       ];
     case 'session_closed':
       return [{ type: 'agentClosed', id: event.id }];
+    case 'session_selected':
+      return [{ type: 'agentSelected', id: event.id }];
     case 'status_changed':
       return [{ type: 'agentStatus', id: event.id, status: event.status }];
     case 'tool_started':
@@ -222,20 +219,151 @@ export function bridgeHostEventToWebviewMessages(
       return [{ type: 'agentToolPermission', id: event.id }];
     case 'permission_cleared':
       return [{ type: 'agentToolPermissionClear', id: event.id }];
-    case 'subagent_started':
-      return [
-        {
-          type: 'agentToolStart',
-          id: event.id,
-          toolId: event.parentToolId,
-          status: `Subtask: ${event.label}`,
-        },
-      ];
     case 'subagent_finished':
       return [{ type: 'subagentClear', id: event.id, parentToolId: event.parentToolId }];
-    default:
-      return [event];
   }
+}
+
+export function normalizeRuntimeEventToHostEvents(event: PixelAgentsEvent): HostToWebviewEvent[] {
+  switch (event.type) {
+    case 'existingAgents':
+      return [
+        {
+          type: 'sessions_snapshot',
+          sessions: normalizeSessionsSnapshot(
+            readNumberArray(event.agents),
+            readAgentMeta(event.agentMeta),
+            readFolderNames(event.folderNames),
+          ),
+        },
+      ];
+    case 'agentCreated':
+      return [
+        {
+          type: 'session_discovered',
+          id: requireNumber(event.id, event.type, 'id'),
+          folderName: readOptionalString(event.folderName),
+        },
+      ];
+    case 'agentClosed':
+      return [
+        {
+          type: 'session_closed',
+          id: requireNumber(event.id, event.type, 'id'),
+        },
+      ];
+    case 'agentSelected':
+      return [
+        {
+          type: 'session_selected',
+          id: requireNumber(event.id, event.type, 'id'),
+        },
+      ];
+    case 'agentStatus':
+      return [
+        {
+          type: 'status_changed',
+          id: requireNumber(event.id, event.type, 'id'),
+          status: requireString(event.status, event.type, 'status'),
+        },
+      ];
+    case 'agentToolStart':
+      return [
+        {
+          type: 'tool_started',
+          id: requireNumber(event.id, event.type, 'id'),
+          toolId: requireString(event.toolId, event.type, 'toolId'),
+          status: requireString(event.status, event.type, 'status'),
+        },
+      ];
+    case 'agentToolDone':
+      return [
+        {
+          type: 'tool_finished',
+          id: requireNumber(event.id, event.type, 'id'),
+          toolId: requireString(event.toolId, event.type, 'toolId'),
+        },
+      ];
+    case 'agentToolsClear':
+      return [
+        {
+          type: 'tools_cleared',
+          id: requireNumber(event.id, event.type, 'id'),
+        },
+      ];
+    case 'subagentToolStart':
+      return [
+        {
+          type: 'tool_started',
+          id: requireNumber(event.id, event.type, 'id'),
+          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
+          toolId: requireString(event.toolId, event.type, 'toolId'),
+          status: requireString(event.status, event.type, 'status'),
+        },
+      ];
+    case 'subagentToolDone':
+      return [
+        {
+          type: 'tool_finished',
+          id: requireNumber(event.id, event.type, 'id'),
+          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
+          toolId: requireString(event.toolId, event.type, 'toolId'),
+        },
+      ];
+    case 'subagentClear':
+      return [
+        {
+          type: 'subagent_finished',
+          id: requireNumber(event.id, event.type, 'id'),
+          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
+        },
+      ];
+    case 'agentToolPermission':
+      return [
+        {
+          type: 'permission_requested',
+          id: requireNumber(event.id, event.type, 'id'),
+        },
+      ];
+    case 'subagentToolPermission':
+      return [
+        {
+          type: 'permission_requested',
+          id: requireNumber(event.id, event.type, 'id'),
+          parentToolId: requireString(event.parentToolId, event.type, 'parentToolId'),
+        },
+      ];
+    case 'agentToolPermissionClear':
+      return [
+        {
+          type: 'permission_cleared',
+          id: requireNumber(event.id, event.type, 'id'),
+        },
+      ];
+    default:
+      throw new Error(`Unsupported runtime event type: ${event.type}`);
+  }
+}
+
+export function renderBootstrapAndRuntimeMessages({
+  bootstrapEvents,
+  runtimeEvents,
+}: {
+  bootstrapEvents: HostToWebviewEvent[];
+  runtimeEvents: PixelAgentsEvent[];
+}): Array<Record<string, unknown>> {
+  return [
+    ...renderHostEventsToWebviewMessages(bootstrapEvents),
+    ...renderHostEventsToWebviewMessages(
+      runtimeEvents.flatMap((event) => normalizeRuntimeEventToHostEvents(event)),
+    ),
+  ];
+}
+
+export function renderHostEventsToWebviewMessages(
+  events: HostToWebviewEvent[],
+): Array<Record<string, unknown>> {
+  return events.flatMap((event) => bridgeHostEventToWebviewMessages(event));
 }
 
 function createExistingAgentsMessage(sessions: SessionSnapshotEntry[]): Record<string, unknown> {
@@ -261,6 +389,18 @@ function createExistingAgentsMessage(sessions: SessionSnapshotEntry[]): Record<s
   };
 }
 
+function normalizeSessionsSnapshot(
+  agentIds: number[],
+  agentMeta: AgentMetaRecord,
+  folderNames: FolderNamesRecord,
+): SessionSnapshotEntry[] {
+  return agentIds.map((id) => ({
+    id,
+    ...agentMeta[id],
+    ...(folderNames[id] ? { folderName: folderNames[id] } : {}),
+  }));
+}
+
 function pickAgentMeta(
   session: SessionSnapshotEntry,
 ): { palette?: number; hueShift?: number; seatId?: string } | null {
@@ -271,4 +411,67 @@ function pickAgentMeta(
   };
 
   return Object.keys(meta).length > 0 ? meta : null;
+}
+
+function requireNumber(value: unknown, eventType: string, field: string): number {
+  if (typeof value !== 'number') {
+    throw new Error(`Runtime event "${eventType}" requires numeric ${field}`);
+  }
+  return value;
+}
+
+function requireString(value: unknown, eventType: string, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Runtime event "${eventType}" requires string ${field}`);
+  }
+  return value;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is number => typeof entry === 'number')
+    : [];
+}
+
+function readAgentMeta(value: unknown): AgentMetaRecord {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const result: AgentMetaRecord = {};
+  for (const [rawId, metaValue] of Object.entries(value)) {
+    const id = Number(rawId);
+    if (!Number.isFinite(id) || !isRecord(metaValue)) {
+      continue;
+    }
+    result[id] = {
+      ...(typeof metaValue.palette === 'number' ? { palette: metaValue.palette } : {}),
+      ...(typeof metaValue.hueShift === 'number' ? { hueShift: metaValue.hueShift } : {}),
+      ...(typeof metaValue.seatId === 'string' ? { seatId: metaValue.seatId } : {}),
+    };
+  }
+  return result;
+}
+
+function readFolderNames(value: unknown): FolderNamesRecord {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  const result: FolderNamesRecord = {};
+  for (const [rawId, folderName] of Object.entries(value)) {
+    const id = Number(rawId);
+    if (Number.isFinite(id) && typeof folderName === 'string') {
+      result[id] = folderName;
+    }
+  }
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null;
 }

@@ -14,7 +14,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   private readonly hostChrome = new VsCodeHostChrome();
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.productServices = new ProductServices(context, context.extensionUri);
+    this.productServices = new ProductServices(context, context.extensionUri, () => this.webview);
   }
 
   private get extensionUri(): vscode.Uri {
@@ -98,31 +98,29 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           this.productServices.setSoundEnabled(message.enabled === true);
           return;
         case 'webviewReady':
-          if (this.webview) {
-            await this.productServices.connectRuntime(this.webview, this.ensureCodexRuntime());
-          }
+          await this.productServices.connectRuntime(this.ensureCodexRuntime());
           return;
         case 'exportLayout':
           await this.hostChrome.exportLayout(this.productServices.getSavedLayout());
           return;
         case 'addExternalAssetDirectory': {
           const directoryPath = await this.hostChrome.pickExternalAssetDirectory();
-          if (directoryPath && this.webview) {
-            await this.productServices.addExternalAssetDirectory(this.webview, directoryPath);
+          if (directoryPath) {
+            await this.productServices.addExternalAssetDirectory(directoryPath);
           }
           return;
         }
         case 'removeExternalAssetDirectory':
-          if (typeof message.path === 'string' && this.webview) {
-            await this.productServices.removeExternalAssetDirectory(this.webview, message.path);
+          if (typeof message.path === 'string') {
+            await this.productServices.removeExternalAssetDirectory(message.path);
           }
           return;
         case 'importLayout': {
           const importedLayout = await this.hostChrome.importLayout();
-          if (!importedLayout || !this.webview) {
+          if (!importedLayout) {
             return;
           }
-          if (!this.productServices.importLayout(this.webview, importedLayout)) {
+          if (!this.productServices.importLayout(importedLayout)) {
             this.hostChrome.showInvalidLayoutError();
             return;
           }
