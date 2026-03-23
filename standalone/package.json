@@ -1,0 +1,8 @@
+{
+  "name": "pixel-agents-standalone",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node ../node_modules/tsx/dist/cli.mjs --test src/server.test.ts"
+  }
+}
