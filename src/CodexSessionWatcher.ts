@@ -230,6 +230,15 @@ export class CodexSessionWatcher {
     this.sink({ type: 'agentSelected', id: agentId });
   }
 
+  getSessionTranscriptPath(agentId: number): string | null {
+    const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
+    if (!session || !fs.existsSync(session.sessionFile)) {
+      return null;
+    }
+
+    return session.sessionFile;
+  }
+
   hideAgent(agentId: number): void {
     const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
     if (!session) return;

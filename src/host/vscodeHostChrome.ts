@@ -14,6 +14,18 @@ export class VsCodeHostChrome {
     void vscode.env.openExternal(vscode.Uri.file(this.codexSessionsRoot));
   }
 
+  async revealTranscript(transcriptPath: string): Promise<void> {
+    if (!fs.existsSync(transcriptPath)) {
+      return;
+    }
+
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(transcriptPath));
+    await vscode.window.showTextDocument(document, {
+      preview: false,
+      preserveFocus: false,
+    });
+  }
+
   async exportLayout(layout: Record<string, unknown> | null): Promise<void> {
     if (!layout) {
       vscode.window.showWarningMessage('Pixel Agents: No saved layout to export.');

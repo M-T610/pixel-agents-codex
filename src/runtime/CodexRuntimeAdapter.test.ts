@@ -8,6 +8,7 @@ interface TestWatcher {
   start(): Promise<void>;
   postSnapshot(): void;
   selectAgent(agentId: number): void;
+  getSessionTranscriptPath(agentId: number): string | null;
   hideAgent(agentId: number): void;
   dispose(): void;
 }
@@ -45,6 +46,9 @@ test('connect returns bootstrap before forwarding snapshot and live events', asy
           emitEvent?.({ type: 'snapshot-event' });
         },
         selectAgent() {},
+        getSessionTranscriptPath() {
+          return null;
+        },
         hideAgent() {},
         dispose() {},
       };
@@ -79,6 +83,9 @@ test('dispatch routes launch, select, and close commands through runtime service
       ...createWatcherStub(),
       selectAgent(agentId: number) {
         calls.push({ type: 'select', value: agentId });
+      },
+      getSessionTranscriptPath() {
+        return null;
       },
       hideAgent(agentId: number) {
         calls.push({ type: 'close', value: agentId });
@@ -148,6 +155,9 @@ test('connect retries with a fresh watcher after a startup failure', async () =>
           attempts.push(`postSnapshot:${watcherId}`);
         },
         selectAgent() {},
+        getSessionTranscriptPath() {
+          return null;
+        },
         hideAgent() {},
         dispose() {
           attempts.push(`dispose:${watcherId}`);
@@ -191,6 +201,9 @@ test('connect replays the runtime snapshot for a new listener after the adapter 
           emitEvent?.({ type: `snapshot-event-${snapshotCount}` });
         },
         selectAgent() {},
+        getSessionTranscriptPath() {
+          return null;
+        },
         hideAgent() {},
         dispose() {},
       };
@@ -224,6 +237,9 @@ function createWatcherStub(): TestWatcher {
     async start() {},
     postSnapshot() {},
     selectAgent() {},
+    getSessionTranscriptPath() {
+      return null;
+    },
     hideAgent() {},
     dispose() {},
   };

@@ -1,5 +1,5 @@
 import { CodexSessionWatcher } from '../CodexSessionWatcher.js';
-import { type CodexTerminalHost,launchCodexTerminal } from '../codexTerminal.js';
+import { type CodexTerminalHost, launchCodexTerminal } from '../codexTerminal.js';
 import type {
   BackendCapabilities,
   PixelAgentsBackendCommand,
@@ -19,6 +19,7 @@ export interface CodexRuntimeWatcher {
   start(): Promise<void>;
   postSnapshot(agentMeta?: Record<string, unknown>): void;
   selectAgent(agentId: number): void;
+  getSessionTranscriptPath(agentId: number): string | null;
   hideAgent(agentId: number): void;
   dispose(): void;
 }
@@ -113,6 +114,11 @@ export class CodexRuntimeAdapter implements PixelAgentsRuntimeAdapter {
     this.listener = null;
     this.watcher?.dispose();
     this.watcher = null;
+  }
+
+  getSessionTranscriptPath(agentId: number): string | null {
+    this.ensureNotDisposed();
+    return this.getWatcher().getSessionTranscriptPath(agentId);
   }
 
   private getWatcher(): CodexRuntimeWatcher {

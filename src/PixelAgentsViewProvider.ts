@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 
 import type { CodexTerminalHost } from './codexTerminal.js';
+import { focusAgentInVsCodeHost } from './host/focusAgentInVsCodeHost.js';
 import { ProductServices } from './host/productServices.js';
 import { VsCodeHostChrome } from './host/vscodeHostChrome.js';
 import { CodexRuntimeAdapter } from './runtime/CodexRuntimeAdapter.js';
@@ -71,12 +72,15 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         case 'openCodexSessions':
           this.hostChrome.openCodexSessionsFolder();
           return;
-        case 'focusAgent':
-          await this.ensureCodexRuntime().dispatch({
-            type: 'select_session',
-            id: message.id as number,
+        case 'focusAgent': {
+          const runtime = this.ensureCodexRuntime();
+          await focusAgentInVsCodeHost({
+            agentId: message.id as number,
+            runtime,
+            hostChrome: this.hostChrome,
           });
           return;
+        }
         case 'closeAgent':
           await this.ensureCodexRuntime().dispatch({
             type: 'close_session',
