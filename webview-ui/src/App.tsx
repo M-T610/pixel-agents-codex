@@ -147,7 +147,6 @@ function App() {
     layoutReady,
     layoutWasReset,
     loadedAssets,
-    workspaceFolders,
     externalAssetDirectories,
   } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
 
@@ -288,7 +287,6 @@ function App() {
         onToggleDebugMode={handleToggleDebugMode}
         alwaysShowOverlay={alwaysShowOverlay}
         onToggleAlwaysShowOverlay={handleToggleAlwaysShowOverlay}
-        workspaceFolders={workspaceFolders}
         externalAssetDirectories={externalAssetDirectories}
       />
 

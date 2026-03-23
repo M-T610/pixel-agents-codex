@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
-import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js';
-import { vscode } from '../vscodeApi.js';
 import { SettingsModal } from './SettingsModal.js';
 
 interface BottomToolbarProps {
@@ -12,7 +10,6 @@ interface BottomToolbarProps {
   onToggleDebugMode: () => void;
   alwaysShowOverlay: boolean;
   onToggleAlwaysShowOverlay: () => void;
-  workspaceFolders: WorkspaceFolder[];
   externalAssetDirectories: string[];
 }
 
@@ -55,190 +52,30 @@ export function BottomToolbar({
   onToggleDebugMode,
   alwaysShowOverlay,
   onToggleAlwaysShowOverlay,
-  workspaceFolders,
   externalAssetDirectories,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
-  const [isBypassMenuOpen, setIsBypassMenuOpen] = useState(false);
-  const [hoveredFolder, setHoveredFolder] = useState<number | null>(null);
-  const [hoveredBypass, setHoveredBypass] = useState<number | null>(null);
-  const folderPickerRef = useRef<HTMLDivElement>(null);
-  const pendingBypassRef = useRef(false);
-
-  // Close folder picker / bypass menu on outside click
-  useEffect(() => {
-    if (!isFolderPickerOpen && !isBypassMenuOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
-        setIsFolderPickerOpen(false);
-        setIsBypassMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [isFolderPickerOpen, isBypassMenuOpen]);
-
-  const hasMultipleFolders = workspaceFolders.length > 1;
-
-  const handleAgentClick = () => {
-    setIsBypassMenuOpen(false);
-    pendingBypassRef.current = false;
-    if (hasMultipleFolders) {
-      setIsFolderPickerOpen((v) => !v);
-    } else {
-      onOpenCodexSessions();
-    }
-  };
-
-  const handleAgentRightClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsFolderPickerOpen(false);
-    setIsBypassMenuOpen((v) => !v);
-  };
-
-  const handleFolderSelect = (folder: WorkspaceFolder) => {
-    setIsFolderPickerOpen(false);
-    const bypassPermissions = pendingBypassRef.current;
-    pendingBypassRef.current = false;
-    vscode.postMessage({
-      type: 'openCodexSessions',
-      folderPath: folder.path,
-      bypassPermissions,
-    });
-  };
-
-  const handleBypassSelect = (bypassPermissions: boolean) => {
-    setIsBypassMenuOpen(false);
-    if (hasMultipleFolders) {
-      pendingBypassRef.current = bypassPermissions;
-      setIsFolderPickerOpen(true);
-    } else {
-      vscode.postMessage({ type: 'openCodexSessions', bypassPermissions });
-    }
-  };
 
   return (
     <div style={panelStyle}>
-      <div ref={folderPickerRef} style={{ position: 'relative' }}>
+      <div style={{ position: 'relative' }}>
         <button
-          onClick={handleAgentClick}
-          onContextMenu={handleAgentRightClick}
+          onClick={onOpenCodexSessions}
           onMouseEnter={() => setHovered('agent')}
           onMouseLeave={() => setHovered(null)}
           style={{
             ...btnBase,
             padding: '5px 12px',
             background:
-              hovered === 'agent' || isFolderPickerOpen || isBypassMenuOpen
-                ? 'var(--pixel-agent-hover-bg)'
-                : 'var(--pixel-agent-bg)',
+              hovered === 'agent' ? 'var(--pixel-agent-hover-bg)' : 'var(--pixel-agent-bg)',
             border: '2px solid var(--pixel-agent-border)',
             color: 'var(--pixel-agent-text)',
           }}
-          title={hasMultipleFolders ? 'Choose a Codex session' : 'Open a Codex session'}
+          title="Open the Codex sessions folder"
         >
           + Session
         </button>
-        {isBypassMenuOpen && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: '100%',
-              left: 0,
-              marginBottom: 4,
-              background: 'var(--pixel-bg)',
-              border: '2px solid var(--pixel-border)',
-              borderRadius: 0,
-              padding: 4,
-              boxShadow: 'var(--pixel-shadow)',
-              minWidth: 180,
-              zIndex: 'var(--pixel-controls-z)',
-            }}
-          >
-            <button
-              onClick={() => handleBypassSelect(false)}
-              onMouseEnter={() => setHoveredBypass(0)}
-              onMouseLeave={() => setHoveredBypass(null)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '6px 10px',
-                fontSize: '24px',
-                color: 'var(--pixel-text)',
-                background: hoveredBypass === 0 ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-                border: 'none',
-                borderRadius: 0,
-                cursor: 'pointer',
-              }}
-            >
-              Normal
-            </button>
-            <div style={{ height: 1, margin: '4px 0', background: 'var(--pixel-border)' }} />
-            <button
-              onClick={() => handleBypassSelect(true)}
-              onMouseEnter={() => setHoveredBypass(1)}
-              onMouseLeave={() => setHoveredBypass(null)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '6px 10px',
-                fontSize: '24px',
-                color: 'var(--pixel-warning-text)',
-                background: hoveredBypass === 1 ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-                border: 'none',
-                borderRadius: 0,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              <span style={{ fontSize: '16px' }}>⚡</span> Bypass Permissions
-            </button>
-          </div>
-        )}
-        {isFolderPickerOpen && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: '100%',
-              left: 0,
-              marginBottom: 4,
-              background: 'var(--pixel-bg)',
-              border: '2px solid var(--pixel-border)',
-              borderRadius: 0,
-              boxShadow: 'var(--pixel-shadow)',
-              minWidth: 160,
-              zIndex: 'var(--pixel-controls-z)',
-            }}
-          >
-            {workspaceFolders.map((folder, i) => (
-              <button
-                key={folder.path}
-                onClick={() => handleFolderSelect(folder)}
-                onMouseEnter={() => setHoveredFolder(i)}
-                onMouseLeave={() => setHoveredFolder(null)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '6px 10px',
-                  fontSize: '22px',
-                  color: 'var(--pixel-text)',
-                  background: hoveredFolder === i ? 'var(--pixel-btn-hover-bg)' : 'transparent',
-                  border: 'none',
-                  borderRadius: 0,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {folder.name}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       <button
         onClick={onToggleEditMode}
