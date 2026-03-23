@@ -5,6 +5,7 @@ import {
   bridgeHostEventToWebviewMessages,
   normalizeRuntimeEventToHostEvents,
   renderBootstrapAndRuntimeMessages,
+  renderHostEventsToWebviewMessages,
 } from './webviewMessageBridge.js';
 
 test('assets_loaded maps wall and furniture payloads to current webview messages', () => {
@@ -220,6 +221,79 @@ test('renders buffered runtime messages only after the bootstrap sequence comple
       'layoutLoaded',
       'existingAgents',
       'agentStatus',
+    ],
+  );
+});
+
+test('preserves the current VS Code bootstrap and update message contract through the bridge', () => {
+  const solidSets = [[[['solid']]]];
+  const glassSets = [[[['glass']]]];
+
+  const bootstrapAndRuntimeMessages = renderBootstrapAndRuntimeMessages({
+    bootstrapEvents: [
+      {
+        type: 'settings_changed',
+        soundEnabled: false,
+        externalAssetDirectories: ['C:\\assets', 'D:\\shared-assets'],
+      },
+      {
+        type: 'assets_loaded',
+        walls: {
+          solidSets,
+          glassSets,
+        },
+      },
+    ],
+    runtimeEvents: [
+      {
+        type: 'existingAgents',
+        agents: [9, 2],
+        folderNames: {
+          9: 'workspace-z',
+          2: 'workspace-a',
+        },
+      },
+    ],
+  });
+
+  const updateMessages = renderHostEventsToWebviewMessages([
+    {
+      type: 'external_asset_directories_changed',
+      dirs: ['D:\\shared-assets'],
+    },
+  ]);
+
+  assert.deepEqual(
+    [
+      ...bootstrapAndRuntimeMessages.filter((message) =>
+        ['settingsLoaded', 'wallTilesLoaded', 'existingAgents'].includes(message.type as string),
+      ),
+      ...updateMessages,
+    ],
+    [
+      {
+        type: 'settingsLoaded',
+        soundEnabled: false,
+        externalAssetDirectories: ['C:\\assets', 'D:\\shared-assets'],
+      },
+      {
+        type: 'wallTilesLoaded',
+        solidSets,
+        glassSets,
+      },
+      {
+        type: 'existingAgents',
+        agents: [2, 9],
+        agentMeta: {},
+        folderNames: {
+          2: 'workspace-a',
+          9: 'workspace-z',
+        },
+      },
+      {
+        type: 'externalAssetDirectoriesUpdated',
+        dirs: ['D:\\shared-assets'],
+      },
     ],
   );
 });

@@ -61,6 +61,20 @@ export interface ExtensionMessageState {
   externalAssetDirectories: string[];
 }
 
+type ExtensionMessage = { type: string; [key: string]: unknown };
+
+function readExtensionMessage(value: unknown): ExtensionMessage | null {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    typeof (value as { type?: unknown }).type !== 'string'
+  ) {
+    return null;
+  }
+
+  return value as ExtensionMessage;
+}
+
 function saveAgentSeats(os: OfficeState): void {
   const seats: Record<number, { palette: number; hueShift: number; seatId: string | null }> = {};
   for (const ch of os.characters.values()) {
@@ -215,8 +229,12 @@ export function useExtensionMessages(
       );
     };
 
-    const handler = (e: MessageEvent) => {
-      const msg = e.data;
+    const handler = (event: { data: unknown }) => {
+      const msg = readExtensionMessage(event.data);
+      if (!msg) {
+        return;
+      }
+
       const os = getOfficeState();
 
       if (msg.type === 'layoutLoaded') {
@@ -542,9 +560,9 @@ export function useExtensionMessages(
         }
       }
     };
-    window.addEventListener('message', handler);
+    const disposeMessageListener = vscode.onMessage(handler);
     vscode.postMessage({ type: 'webviewReady' });
-    return () => window.removeEventListener('message', handler);
+    return disposeMessageListener;
   }, [getOfficeState]);
 
   return {

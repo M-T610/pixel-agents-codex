@@ -6,6 +6,8 @@ import { ProductServices } from './host/productServices.js';
 import { VsCodeHostChrome } from './host/vscodeHostChrome.js';
 import { CodexRuntimeAdapter } from './runtime/CodexRuntimeAdapter.js';
 
+type WebviewCommandMessage = { type: string; [key: string]: unknown };
+
 export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   webviewView: vscode.WebviewView | undefined;
 
@@ -59,7 +61,12 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = getWebviewContent(webviewView.webview, this.extensionUri);
 
-    webviewView.webview.onDidReceiveMessage(async (message) => {
+    webviewView.webview.onDidReceiveMessage(async (rawMessage) => {
+      const message = readWebviewCommandMessage(rawMessage);
+      if (!message) {
+        return;
+      }
+
       switch (message.type) {
         case 'openCodexSessions':
           this.hostChrome.openCodexSessionsFolder();
@@ -140,6 +147,18 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     this.codexRuntime = null;
     this.productServices.dispose();
   }
+}
+
+function readWebviewCommandMessage(value: unknown): WebviewCommandMessage | null {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    typeof (value as { type?: unknown }).type !== 'string'
+  ) {
+    return null;
+  }
+
+  return value as WebviewCommandMessage;
 }
 
 export function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri): string {
