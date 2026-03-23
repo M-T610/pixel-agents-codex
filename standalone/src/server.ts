@@ -6,6 +6,7 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from 'node:http';
+import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
@@ -504,6 +505,9 @@ export class StandaloneServer {
     }
 
     const chromeResult = await this.hostChrome.handleCommand(command);
+    if (chromeResult.clientEvents.length > 0) {
+      session.enqueueWebviewMessages(renderHostEventsToWebviewMessages(chromeResult.clientEvents));
+    }
     if (chromeResult.events.length > 0) {
       this.broadcastHostEvents(chromeResult.events);
     }
@@ -729,7 +733,21 @@ async function runStandaloneCli(): Promise<void> {
   );
 }
 
-function createDetachedTerminalHost(): CodexTerminalHost {
+export interface DetachedSpawnOptions {
+  cwd?: string;
+  detached: true;
+  shell: true;
+  stdio: 'ignore';
+}
+
+export type DetachedSpawnCommand = (
+  command: string,
+  options: DetachedSpawnOptions,
+) => { unref(): void };
+
+export function createDetachedTerminalHost(
+  spawnCommand: DetachedSpawnCommand = spawnDetachedCommand,
+): CodexTerminalHost {
   return {
     getTerminalNames() {
       return [];
@@ -738,17 +756,40 @@ function createDetachedTerminalHost(): CodexTerminalHost {
       return {
         show() {},
         sendText(command) {
-          const child = spawn(command, {
-            cwd: options.cwd,
-            detached: true,
-            shell: true,
-            stdio: 'ignore',
-          });
-          child.unref();
+          const cwd = resolveDetachedTerminalCwd(options.cwd);
+
+          try {
+            const child = spawnCommand(command, {
+              ...(cwd ? { cwd } : {}),
+              detached: true,
+              shell: true,
+              stdio: 'ignore',
+            });
+            child.unref();
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[Standalone] Failed to launch detached Codex terminal: ${message}`);
+          }
         },
       };
     },
   };
+}
+
+function spawnDetachedCommand(command: string, options: DetachedSpawnOptions): { unref(): void } {
+  return spawn(command, options);
+}
+
+function resolveDetachedTerminalCwd(cwd?: string): string | undefined {
+  if (typeof cwd !== 'string' || cwd.length === 0) {
+    return undefined;
+  }
+
+  try {
+    return statSync(cwd).isDirectory() ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function waitForImmediate(): Promise<void> {

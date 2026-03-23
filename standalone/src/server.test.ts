@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import * as codexRuntimeAdapterModule from '../../src/runtime/CodexRuntimeAdapter.js';
+import type { PixelAgentsRuntimeAdapter } from '../../src/runtime/contracts.js';
 import {
   StandaloneServer,
   StandaloneClientSession,
+  createDetachedTerminalHost,
   createStandaloneBootstrapMessages,
   translateRuntimeEventToWebviewMessages,
+  type DetachedSpawnOptions,
   type StandaloneHostMessage,
   type StandaloneBootstrapMessage,
 } from './server.js';
@@ -220,8 +223,84 @@ test('treats standalone-unavailable VS Code actions as explicit no-ops', async (
     assert.deepEqual(result, {
       handled: true,
       events: [],
+      clientEvents: [],
     });
   }
+});
+
+test('focusAgent sends agentSelected only to the originating standalone client', async (t) => {
+  const server = new StandaloneServer({
+    runtime: createNoopRuntime(),
+  });
+  await server.start();
+  t.after(async () => {
+    await server.stop();
+  });
+
+  assert.ok(server.port !== null);
+
+  const firstClient = await connectAndBootstrapClient(server.port);
+  const secondClient = await connectAndBootstrapClient(server.port);
+  t.after(() => {
+    firstClient.close();
+    secondClient.close();
+  });
+
+  firstClient.sendCommand({ type: 'focusAgent', id: 11 });
+
+  const selectedMessage = await firstClient.waitForMessage(
+    (message) =>
+      message.kind === 'webview_messages' &&
+      message.messages.length === 1 &&
+      message.messages[0]?.type === 'agentSelected' &&
+      message.messages[0]?.id === 11,
+  );
+  assert.deepEqual(selectedMessage, {
+    kind: 'webview_messages',
+    messages: [{ type: 'agentSelected', id: 11 }],
+  });
+
+  await secondClient.assertNoMessage(
+    (message) =>
+      message.kind === 'webview_messages' &&
+      message.messages.some((entry) => entry.type === 'agentSelected'),
+  );
+});
+
+test('detached standalone launch ignores invalid cwd and never throws on spawn failure', () => {
+  const spawnCalls: Array<{ command: string; options: Record<string, unknown> }> = [];
+  const terminalHost = createDetachedTerminalHost(
+    (command: string, options: DetachedSpawnOptions) => {
+      spawnCalls.push({
+        command,
+        options: options as unknown as Record<string, unknown>,
+      });
+      const error = new Error('ENOENT');
+      (error as Error & { code?: string }).code = 'ENOENT';
+      throw error;
+    },
+  );
+
+  const invalidCwd = `C:\\__pixel_agents_missing__\\${Date.now().toString()}`;
+
+  assert.doesNotThrow(() => {
+    const terminal = terminalHost.createTerminal({
+      name: 'Codex #1',
+      cwd: invalidCwd,
+    });
+    terminal.sendText('codex');
+  });
+
+  assert.deepEqual(spawnCalls, [
+    {
+      command: 'codex',
+      options: {
+        detached: true,
+        shell: true,
+        stdio: 'ignore',
+      },
+    },
+  ]);
 });
 
 test('standalone host boots with codex runtime and emits current ui-compatible snapshot', async (t) => {
@@ -397,6 +476,146 @@ async function connectAndReadBootstrap(port: number): Promise<StandaloneBootstra
 
     socket.addEventListener('close', () => {
       clearTimeout(timeout);
+    });
+  });
+}
+
+function createNoopRuntime() {
+  const runtime: PixelAgentsRuntimeAdapter = {
+    getCapabilities() {
+      return {
+        observe: true,
+        launch: false,
+        select: false,
+        close: false,
+      };
+    },
+    async connect() {
+      return {
+        backendCapabilities: {
+          observe: true,
+          launch: false,
+          select: false,
+          close: false,
+        },
+      };
+    },
+    async dispatch() {
+      throw new Error('dispatch should not be called in this test');
+    },
+    dispose() {},
+  };
+
+  return runtime;
+}
+
+async function connectAndBootstrapClient(port: number) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port.toString()}/__pixel_agents_host`);
+  const queuedMessages: StandaloneHostMessage[] = [];
+  const waitingResolvers: Array<(message: StandaloneHostMessage) => void> = [];
+
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data)) as StandaloneHostMessage;
+    const resolver = waitingResolvers.shift();
+    if (resolver) {
+      resolver(message);
+      return;
+    }
+
+    queuedMessages.push(message);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Timed out opening websocket'));
+    }, 5000);
+
+    socket.addEventListener('open', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    socket.addEventListener('error', (event) => {
+      clearTimeout(timeout);
+      reject(event);
+    });
+  });
+
+  socket.send(JSON.stringify({ kind: 'command', command: { type: 'webviewReady' } }));
+
+  while (true) {
+    const message = await waitForStandaloneMessage(queuedMessages, waitingResolvers);
+    if (message.kind !== 'bootstrap') {
+      continue;
+    }
+
+    if (message.step === 'sessions_snapshot') {
+      socket.send(JSON.stringify({ kind: 'bootstrap_complete' }));
+      break;
+    }
+  }
+
+  return {
+    close() {
+      socket.close();
+    },
+    sendCommand(command: Record<string, unknown>) {
+      socket.send(JSON.stringify({ kind: 'command', command }));
+    },
+    async waitForMessage(
+      predicate: (message: StandaloneHostMessage) => boolean,
+      timeoutMs = 1000,
+    ): Promise<StandaloneHostMessage> {
+      const deadline = Date.now() + timeoutMs;
+
+      while (Date.now() < deadline) {
+        const message = await waitForStandaloneMessage(
+          queuedMessages,
+          waitingResolvers,
+          deadline - Date.now(),
+        );
+        if (predicate(message)) {
+          return message;
+        }
+      }
+
+      throw new Error('Timed out waiting for matching host message');
+    },
+    async assertNoMessage(
+      predicate: (message: StandaloneHostMessage) => boolean,
+      timeoutMs = 250,
+    ): Promise<void> {
+      try {
+        const message = await this.waitForMessage(predicate, timeoutMs);
+        assert.fail(`Unexpected host message: ${JSON.stringify(message)}`);
+      } catch (error) {
+        assert.match(String(error), /Timed out waiting for standalone host message/);
+      }
+    },
+  };
+}
+
+async function waitForStandaloneMessage(
+  queuedMessages: StandaloneHostMessage[],
+  waitingResolvers: Array<(message: StandaloneHostMessage) => void>,
+  timeoutMs = 5000,
+): Promise<StandaloneHostMessage> {
+  const immediate = queuedMessages.shift();
+  if (immediate) {
+    return immediate;
+  }
+
+  return await new Promise<StandaloneHostMessage>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      const index = waitingResolvers.indexOf(resolve);
+      if (index >= 0) {
+        waitingResolvers.splice(index, 1);
+      }
+      reject(new Error('Timed out waiting for standalone host message'));
+    }, timeoutMs);
+
+    waitingResolvers.push((message) => {
+      clearTimeout(timeout);
+      resolve(message);
     });
   });
 }

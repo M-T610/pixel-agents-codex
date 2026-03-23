@@ -37,6 +37,8 @@ export type StandaloneChromeEvent = Extract<
   | { type: 'layout_changed' }
 >;
 
+export type StandaloneClientChromeEvent = Extract<HostToWebviewEvent, { type: 'session_selected' }>;
+
 export interface StandaloneHostChromeOptions {
   capabilities?: Partial<HostCapabilities>;
   settings?: Partial<StandaloneHostSettings>;
@@ -47,6 +49,7 @@ export interface StandaloneHostChromeOptions {
 export interface StandaloneHostChromeResult {
   handled: boolean;
   events: StandaloneChromeEvent[];
+  clientEvents: StandaloneClientChromeEvent[];
 }
 
 const defaultHostCapabilities: HostCapabilities = {
@@ -97,18 +100,24 @@ export class StandaloneHostChrome {
 
   async handleCommand(command: StandaloneBrowserCommand): Promise<StandaloneHostChromeResult> {
     switch (command.type) {
+      case 'focusAgent':
+        return {
+          handled: true,
+          events: [],
+          clientEvents: [{ type: 'session_selected', id: command.id }],
+        };
       case 'saveAgentSeats':
         this.persistedAgentMeta = sanitizeAgentSeats(command.seats);
-        return { handled: true, events: [] };
+        return { handled: true, events: [], clientEvents: [] };
       case 'saveLayout':
         this.layout = isRecord(command.layout) ? { ...command.layout } : null;
-        return { handled: true, events: [] };
+        return { handled: true, events: [], clientEvents: [] };
       case 'setSoundEnabled':
         this.settings.soundEnabled = command.enabled === true;
-        return { handled: true, events: [] };
+        return { handled: true, events: [], clientEvents: [] };
       case 'removeExternalAssetDirectory':
         if (typeof command.path !== 'string') {
-          return { handled: false, events: [] };
+          return { handled: false, events: [], clientEvents: [] };
         }
 
         this.settings.externalAssetDirectories = this.settings.externalAssetDirectories.filter(
@@ -122,14 +131,15 @@ export class StandaloneHostChrome {
               dirs: [...this.settings.externalAssetDirectories],
             },
           ],
+          clientEvents: [],
         };
       case 'addExternalAssetDirectory':
       case 'exportLayout':
       case 'importLayout':
       case 'openCodexSessions':
-        return { handled: true, events: [] };
+        return { handled: true, events: [], clientEvents: [] };
       default:
-        return { handled: false, events: [] };
+        return { handled: false, events: [], clientEvents: [] };
     }
   }
 }
