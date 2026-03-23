@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 
+import { useHostCapabilities } from '../vscodeApi.js';
 import { SettingsModal } from './SettingsModal.js';
 
 interface BottomToolbarProps {
@@ -44,6 +45,12 @@ const btnActive: React.CSSProperties = {
   border: '2px solid var(--pixel-accent)',
 };
 
+const btnDisabled: React.CSSProperties = {
+  ...btnBase,
+  opacity: 0.45,
+  cursor: 'default',
+};
+
 export function BottomToolbar({
   isEditMode,
   onOpenCodexSessions,
@@ -56,23 +63,32 @@ export function BottomToolbar({
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { hostCapabilities } = useHostCapabilities();
+  const canOpenCodexSessions = hostCapabilities.revealSessionsRoot;
 
   return (
     <div style={panelStyle}>
       <div style={{ position: 'relative' }}>
         <button
-          onClick={onOpenCodexSessions}
+          onClick={canOpenCodexSessions ? onOpenCodexSessions : undefined}
           onMouseEnter={() => setHovered('agent')}
           onMouseLeave={() => setHovered(null)}
+          disabled={!canOpenCodexSessions}
           style={{
-            ...btnBase,
+            ...(canOpenCodexSessions ? btnBase : btnDisabled),
             padding: '5px 12px',
             background:
-              hovered === 'agent' ? 'var(--pixel-agent-hover-bg)' : 'var(--pixel-agent-bg)',
+              canOpenCodexSessions && hovered === 'agent'
+                ? 'var(--pixel-agent-hover-bg)'
+                : 'var(--pixel-agent-bg)',
             border: '2px solid var(--pixel-agent-border)',
             color: 'var(--pixel-agent-text)',
           }}
-          title="Open the Codex sessions folder"
+          title={
+            canOpenCodexSessions
+              ? 'Open the Codex sessions folder'
+              : 'Opening the Codex sessions folder is unavailable in this host'
+          }
         >
           + Session
         </button>

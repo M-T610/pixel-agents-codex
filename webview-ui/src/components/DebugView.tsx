@@ -1,5 +1,7 @@
+import React from 'react';
+
 import type { ToolActivity } from '../office/types.js';
-import { vscode } from '../vscodeApi.js';
+import { useHostCapabilities, vscode } from '../vscodeApi.js';
 
 interface DebugViewProps {
   agents: number[];
@@ -60,6 +62,11 @@ export function DebugView({
   subagentTools,
   onSelectAgent,
 }: DebugViewProps) {
+  void React;
+  const { backendCapabilities } = useHostCapabilities();
+  const canSelectAgent = backendCapabilities.select;
+  const canCloseAgent = backendCapabilities.close;
+
   const renderAgentCard = (id: number) => {
     const isSelected = selectedAgent === id;
     const tools = agentTools[id] || [];
@@ -81,7 +88,8 @@ export function DebugView({
       >
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 0 }}>
           <button
-            onClick={() => onSelectAgent(id)}
+            onClick={canSelectAgent ? () => onSelectAgent(id) : undefined}
+            disabled={!canSelectAgent}
             style={{
               borderRadius: 0,
               padding: '6px 10px',
@@ -89,23 +97,30 @@ export function DebugView({
               background: isSelected ? 'rgba(90, 140, 255, 0.25)' : undefined,
               color: isSelected ? '#fff' : undefined,
               fontWeight: isSelected ? 'bold' : undefined,
+              opacity: canSelectAgent ? 1 : 0.5,
+              cursor: canSelectAgent ? 'pointer' : 'default',
             }}
+            title={canSelectAgent ? undefined : 'Selecting sessions is unavailable in this host'}
           >
             {label}
           </button>
           <button
-            onClick={() => vscode.postMessage({ type: 'closeAgent', id })}
+            onClick={
+              canCloseAgent ? () => vscode.postMessage({ type: 'closeAgent', id }) : undefined
+            }
+            disabled={!canCloseAgent}
             style={{
               borderRadius: 0,
               padding: '6px 8px',
               fontSize: '26px',
-              opacity: 0.7,
+              opacity: canCloseAgent ? 0.7 : 0.35,
               background: isSelected ? 'rgba(90, 140, 255, 0.25)' : undefined,
               color: isSelected ? '#fff' : undefined,
+              cursor: canCloseAgent ? 'pointer' : 'default',
             }}
-            title="Close agent"
+            title={canCloseAgent ? 'Close agent' : 'Closing sessions is unavailable in this host'}
           >
-            ✕
+            X
           </button>
         </span>
         {(tools.length > 0 || status === 'waiting') && (

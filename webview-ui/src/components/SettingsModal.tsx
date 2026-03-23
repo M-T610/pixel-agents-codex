@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 
 import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js';
-import { vscode } from '../vscodeApi.js';
+import { useHostCapabilities, vscode } from '../vscodeApi.js';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -39,6 +39,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [soundLocal, setSoundLocal] = useState(isSoundEnabled);
+  const { hostCapabilities } = useHostCapabilities();
 
   if (!isOpen) return null;
 
@@ -104,62 +105,70 @@ export function SettingsModal({
           </button>
         </div>
         {/* Menu items */}
-        <button
-          onClick={() => {
-            vscode.postMessage({ type: 'openCodexSessions' });
-            onClose();
-          }}
-          onMouseEnter={() => setHovered('sessions')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...menuItemBase,
-            background: hovered === 'sessions' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-          }}
-        >
-          Open Sessions Folder
-        </button>
-        <button
-          onClick={() => {
-            vscode.postMessage({ type: 'exportLayout' });
-            onClose();
-          }}
-          onMouseEnter={() => setHovered('export')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...menuItemBase,
-            background: hovered === 'export' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-          }}
-        >
-          Export Layout
-        </button>
-        <button
-          onClick={() => {
-            vscode.postMessage({ type: 'importLayout' });
-            onClose();
-          }}
-          onMouseEnter={() => setHovered('import')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...menuItemBase,
-            background: hovered === 'import' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-          }}
-        >
-          Import Layout
-        </button>
-        <button
-          onClick={() => {
-            vscode.postMessage({ type: 'addExternalAssetDirectory' });
-            onClose();
-          }}
-          onMouseEnter={() => setHovered('addAssets')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...menuItemBase,
-            background: hovered === 'addAssets' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
-          }}
-        >
-          Add Asset Directory
-        </button>
+        {hostCapabilities.revealSessionsRoot && (
+          <button
+            onClick={() => {
+              vscode.postMessage({ type: 'openCodexSessions' });
+              onClose();
+            }}
+            onMouseEnter={() => setHovered('sessions')}
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              ...menuItemBase,
+              background: hovered === 'sessions' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+            }}
+          >
+            Open Sessions Folder
+          </button>
+        )}
+        {hostCapabilities.exportLayout && (
+          <button
+            onClick={() => {
+              vscode.postMessage({ type: 'exportLayout' });
+              onClose();
+            }}
+            onMouseEnter={() => setHovered('export')}
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              ...menuItemBase,
+              background: hovered === 'export' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+            }}
+          >
+            Export Layout
+          </button>
+        )}
+        {hostCapabilities.importLayout && (
+          <button
+            onClick={() => {
+              vscode.postMessage({ type: 'importLayout' });
+              onClose();
+            }}
+            onMouseEnter={() => setHovered('import')}
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              ...menuItemBase,
+              background: hovered === 'import' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+            }}
+          >
+            Import Layout
+          </button>
+        )}
+        {hostCapabilities.pickAssetDirectory && (
+          <button
+            onClick={() => {
+              vscode.postMessage({ type: 'addExternalAssetDirectory' });
+              onClose();
+            }}
+            onMouseEnter={() => setHovered('addAssets')}
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              ...menuItemBase,
+              background: hovered === 'addAssets' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+            }}
+          >
+            Add Asset Directory
+          </button>
+        )}
         {externalAssetDirectories.map((dir) => (
           <div
             key={dir}
