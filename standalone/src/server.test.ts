@@ -205,6 +205,25 @@ test('queues browser commands until bootstrap completes for the connection', () 
   ]);
 });
 
+test('treats standalone-unavailable VS Code actions as explicit no-ops', async () => {
+  const hostChrome = new StandaloneHostChrome();
+  const unsupportedCommands = [
+    { type: 'openCodexSessions' } as const,
+    { type: 'exportLayout' } as const,
+    { type: 'importLayout' } as const,
+    { type: 'addExternalAssetDirectory' } as const,
+  ];
+
+  for (const command of unsupportedCommands) {
+    const result = await hostChrome.handleCommand(command);
+
+    assert.deepEqual(result, {
+      handled: true,
+      events: [],
+    });
+  }
+});
+
 test('standalone host boots with codex runtime and emits current ui-compatible snapshot', async (t) => {
   const workspacePath = 'C:\\workspace-a';
   const furnitureCatalog = [

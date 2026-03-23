@@ -127,7 +127,7 @@ export class StandaloneHostChrome {
       case 'exportLayout':
       case 'importLayout':
       case 'openCodexSessions':
-        return { handled: false, events: [] };
+        return { handled: true, events: [] };
       default:
         return { handled: false, events: [] };
     }
