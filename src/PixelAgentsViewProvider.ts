@@ -6,15 +6,18 @@ import * as vscode from 'vscode';
 import {
   loadCharacterSprites,
   loadDefaultLayout,
+  type LoadedAssets,
   loadFloorTiles,
   loadFurnitureAssets,
   loadWallTiles,
+  mergeLoadedAssets,
   sendAssetsToWebview,
   sendCharacterSpritesToWebview,
   sendFloorTilesToWebview,
   sendWallTilesToWebview,
 } from './assetLoader.js';
 import { CodexSessionWatcher } from './CodexSessionWatcher.js';
+import { readConfig, writeConfig } from './configPersistence.js';
 import {
   GLOBAL_KEY_SOUND_ENABLED,
   LAYOUT_REVISION_KEY,
@@ -33,6 +36,9 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
   // Bundled default layout (loaded from assets/default-layout.json)
   defaultLayout: Record<string, unknown> | null = null;
+
+  // Root path of bundled assets (set once on first load)
+  private assetsRoot: string | null = null;
 
   // Cross-window layout sync
   layoutWatcher: LayoutWatcher | null = null;
@@ -94,7 +100,12 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         await this.ensureCodexWatcher().start();
 
         const soundEnabled = this.context.globalState.get<boolean>(GLOBAL_KEY_SOUND_ENABLED, true);
-        this.webview?.postMessage({ type: 'settingsLoaded', soundEnabled });
+        const config = readConfig();
+        this.webview?.postMessage({
+          type: 'settingsLoaded',
+          soundEnabled,
+          externalAssetDirectories: config.externalAssetDirectories,
+        });
 
         const wsFolders = vscode.workspace.workspaceFolders;
         if (wsFolders && wsFolders.length > 1) {
@@ -120,6 +131,36 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           fs.writeFileSync(uri.fsPath, JSON.stringify(layout, null, 2), 'utf-8');
           vscode.window.showInformationMessage('Pixel Agents: Layout exported successfully.');
         }
+      } else if (message.type === 'addExternalAssetDirectory') {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFolders: true,
+          canSelectFiles: false,
+          canSelectMany: false,
+          openLabel: 'Select Asset Directory',
+        });
+        if (!uris || uris.length === 0) return;
+        const newPath = uris[0].fsPath;
+        const cfg = readConfig();
+        if (!cfg.externalAssetDirectories.includes(newPath)) {
+          cfg.externalAssetDirectories.push(newPath);
+          writeConfig(cfg);
+        }
+        await this.reloadAndSendFurniture();
+        this.webview?.postMessage({
+          type: 'externalAssetDirectoriesUpdated',
+          dirs: cfg.externalAssetDirectories,
+        });
+      } else if (message.type === 'removeExternalAssetDirectory') {
+        const cfg = readConfig();
+        cfg.externalAssetDirectories = cfg.externalAssetDirectories.filter(
+          (d) => d !== (message.path as string),
+        );
+        writeConfig(cfg);
+        await this.reloadAndSendFurniture();
+        this.webview?.postMessage({
+          type: 'externalAssetDirectoriesUpdated',
+          dirs: cfg.externalAssetDirectories,
+        });
       } else if (message.type === 'importLayout') {
         const uris = await vscode.window.showOpenDialog({
           filters: { 'JSON Files': ['json'] },
@@ -192,6 +233,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (assetsRoot) {
+        this.assetsRoot = assetsRoot;
         this.defaultLayout = loadDefaultLayout(assetsRoot);
 
         const charSprites = await loadCharacterSprites(assetsRoot);
@@ -209,7 +251,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           sendWallTilesToWebview(this.webview, wallTiles);
         }
 
-        const assets = await loadFurnitureAssets(assetsRoot);
+        const assets = await this.loadAllFurnitureAssets();
         if (assets && this.webview) {
           sendAssetsToWebview(this.webview, assets);
         }
@@ -226,6 +268,32 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         wasReset: result?.wasReset ?? false,
       });
       this.startLayoutWatcher();
+    }
+  }
+
+  private async loadAllFurnitureAssets(): Promise<LoadedAssets | null> {
+    if (!this.assetsRoot) return null;
+    let assets = await loadFurnitureAssets(this.assetsRoot);
+    const config = readConfig();
+    for (const extraDir of config.externalAssetDirectories) {
+      console.log('[Extension] Loading external assets from:', extraDir);
+      const extra = await loadFurnitureAssets(extraDir);
+      if (extra) {
+        assets = assets ? mergeLoadedAssets(assets, extra) : extra;
+      }
+    }
+    return assets;
+  }
+
+  private async reloadAndSendFurniture(): Promise<void> {
+    if (!this.assetsRoot || !this.webview) return;
+    try {
+      const assets = await this.loadAllFurnitureAssets();
+      if (assets) {
+        sendAssetsToWebview(this.webview, assets);
+      }
+    } catch (err) {
+      console.error('[Extension] Error reloading furniture assets:', err);
     }
   }
 
