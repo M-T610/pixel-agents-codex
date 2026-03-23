@@ -170,6 +170,55 @@ test('connect retries with a fresh watcher after a startup failure', async () =>
   assert.deepEqual(attempts, ['start:1', 'dispose:1', 'start:2', 'postSnapshot:2']);
 });
 
+test('connect replays the runtime snapshot for a new listener after the adapter is already connected', async () => {
+  const firstListenerEvents: string[] = [];
+  const secondListenerEvents: string[] = [];
+  const calls: string[] = [];
+  let emitEvent: ((event: PixelAgentsEvent) => void) | undefined;
+  let snapshotCount = 0;
+
+  const adapter = new CodexRuntimeAdapter({
+    workspacePaths: [],
+    createWatcher: (sink) => {
+      emitEvent = sink;
+      return {
+        async start() {
+          calls.push('start');
+        },
+        postSnapshot() {
+          snapshotCount += 1;
+          calls.push(`postSnapshot:${snapshotCount}`);
+          emitEvent?.({ type: `snapshot-event-${snapshotCount}` });
+        },
+        selectAgent() {},
+        hideAgent() {},
+        dispose() {},
+      };
+    },
+  });
+
+  await adapter.connect((event) => {
+    firstListenerEvents.push(event.type);
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  const reconnectBootstrap = await adapter.connect((event) => {
+    secondListenerEvents.push(event.type);
+  });
+  emitEvent?.({ type: 'live-event-after-reconnect' });
+
+  assert.deepEqual(reconnectBootstrap, {
+    backendCapabilities: adapter.getCapabilities(),
+  });
+  assert.deepEqual(secondListenerEvents, []);
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, ['start', 'postSnapshot:1', 'postSnapshot:2']);
+  assert.deepEqual(firstListenerEvents, ['snapshot-event-1']);
+  assert.deepEqual(secondListenerEvents, ['snapshot-event-2', 'live-event-after-reconnect']);
+});
+
 function createWatcherStub(): TestWatcher {
   return {
     async start() {},

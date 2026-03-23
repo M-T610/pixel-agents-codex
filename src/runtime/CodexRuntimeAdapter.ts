@@ -52,6 +52,7 @@ export class CodexRuntimeAdapter implements PixelAgentsRuntimeAdapter {
     this.listener = listener;
 
     if (this.deliveryState === 'connected') {
+      this.scheduleSnapshotReplay();
       return this.createBootstrap();
     }
 
@@ -60,16 +61,7 @@ export class CodexRuntimeAdapter implements PixelAgentsRuntimeAdapter {
       this.connectPromise = this.getWatcher()
         .start()
         .then(() => {
-          this.initialDeliveryTimer = setImmediate(() => {
-            this.initialDeliveryTimer = null;
-            if (this.deliveryState === 'disposed') {
-              return;
-            }
-
-            this.deliveryState = 'connected';
-            this.getWatcher().postSnapshot(this.getAgentMeta());
-            this.flushQueuedEvents();
-          });
+          this.scheduleSnapshotReplay();
         })
         .catch((error) => {
           this.resetAfterFailedConnect();
@@ -162,6 +154,25 @@ export class CodexRuntimeAdapter implements PixelAgentsRuntimeAdapter {
 
   private getAgentMeta(): Record<string, unknown> {
     return this.options.getAgentMeta?.() ?? this.options.agentMeta ?? {};
+  }
+
+  private scheduleSnapshotReplay(): void {
+    this.deliveryState = 'connecting';
+    this.connectPromise = Promise.resolve();
+    if (this.initialDeliveryTimer) {
+      clearImmediate(this.initialDeliveryTimer);
+    }
+    this.initialDeliveryTimer = setImmediate(() => {
+      this.initialDeliveryTimer = null;
+      if (this.deliveryState === 'disposed') {
+        return;
+      }
+
+      this.deliveryState = 'connected';
+      this.connectPromise = null;
+      this.getWatcher().postSnapshot(this.getAgentMeta());
+      this.flushQueuedEvents();
+    });
   }
 
   private resetAfterFailedConnect(): void {
