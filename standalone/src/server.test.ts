@@ -8,6 +8,7 @@ import {
   StandaloneClientSession,
   createDetachedTerminalHost,
   createStandaloneBootstrapMessages,
+  maybeOpenStandaloneBrowser,
   translateRuntimeEventToWebviewMessages,
   type DetachedSpawnOptions,
   type StandaloneHostMessage,
@@ -301,6 +302,28 @@ test('detached standalone launch ignores invalid cwd and never throws on spawn f
       },
     },
   ]);
+});
+
+test('opens the standalone browser URL by default and allows opt-out', () => {
+  const openedUrls: string[] = [];
+
+  maybeOpenStandaloneBrowser('http://127.0.0.1:53285', {
+    env: {},
+    openUrl(url) {
+      openedUrls.push(url);
+    },
+  });
+
+  maybeOpenStandaloneBrowser('http://127.0.0.1:53285', {
+    env: {
+      PIXEL_AGENTS_NO_BROWSER: '1',
+    },
+    openUrl(url) {
+      openedUrls.push(`unexpected:${url}`);
+    },
+  });
+
+  assert.deepEqual(openedUrls, ['http://127.0.0.1:53285']);
 });
 
 test('standalone host boots with codex runtime and emits current ui-compatible snapshot', async (t) => {

@@ -715,6 +715,7 @@ async function runStandaloneCli(): Promise<void> {
   const server = await startStandaloneServer({
     workspaceScopeStore: createDefaultWorkspaceScopeStore(),
   });
+  const url = `http://127.0.0.1:${server.port?.toString() ?? 'unknown-port'}`;
 
   const stopServer = async () => {
     await server.stop();
@@ -728,9 +729,11 @@ async function runStandaloneCli(): Promise<void> {
     void stopServer();
   });
 
-  console.log(
-    `[Standalone] listening on http://127.0.0.1:${server.port?.toString() ?? 'unknown-port'}`,
-  );
+  console.log(`[Standalone] listening on ${url}`);
+  maybeOpenStandaloneBrowser(url, {
+    env: process.env,
+    openUrl: openStandaloneBrowserUrl,
+  });
 }
 
 export interface DetachedSpawnOptions {
@@ -738,6 +741,11 @@ export interface DetachedSpawnOptions {
   detached: true;
   shell: true;
   stdio: 'ignore';
+}
+
+export interface OpenStandaloneBrowserOptions {
+  env?: NodeJS.ProcessEnv;
+  openUrl?: (url: string) => void;
 }
 
 export type DetachedSpawnCommand = (
@@ -778,6 +786,42 @@ export function createDetachedTerminalHost(
 
 function spawnDetachedCommand(command: string, options: DetachedSpawnOptions): { unref(): void } {
   return spawn(command, options);
+}
+
+export function maybeOpenStandaloneBrowser(
+  url: string,
+  options: OpenStandaloneBrowserOptions = {},
+): void {
+  const env = options.env ?? process.env;
+  if (env.PIXEL_AGENTS_NO_BROWSER === '1') {
+    return;
+  }
+
+  try {
+    (options.openUrl ?? openStandaloneBrowserUrl)(url);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[Standalone] Failed to open browser: ${message}`);
+  }
+}
+
+function openStandaloneBrowserUrl(url: string): void {
+  const child =
+    process.platform === 'win32'
+      ? spawn('cmd', ['/c', 'start', '', url], {
+          detached: true,
+          stdio: 'ignore',
+        })
+      : process.platform === 'darwin'
+        ? spawn('open', [url], {
+            detached: true,
+            stdio: 'ignore',
+          })
+        : spawn('xdg-open', [url], {
+            detached: true,
+            stdio: 'ignore',
+          });
+  child.unref();
 }
 
 function resolveDetachedTerminalCwd(cwd?: string): string | undefined {
