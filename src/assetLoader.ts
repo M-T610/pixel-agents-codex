@@ -35,6 +35,25 @@ export interface LoadedAssets {
   sprites: Map<string, string[][]>; // assetId -> SpriteData
 }
 
+export function spritesMapToObject(
+  sprites: ReadonlyMap<string, string[][]>,
+): Record<string, string[][]> {
+  const spritesObject: Record<string, string[][]> = {};
+  for (const [id, spriteData] of sprites) {
+    spritesObject[id] = spriteData;
+  }
+
+  return spritesObject;
+}
+
+export function createFurnitureAssetsLoadedMessage(assets: LoadedAssets): Record<string, unknown> {
+  return {
+    type: 'furnitureAssetsLoaded',
+    catalog: assets.catalog,
+    sprites: spritesMapToObject(assets.sprites),
+  };
+}
+
 export function mergeLoadedAssets(a: LoadedAssets, b: LoadedAssets): LoadedAssets {
   const bIds = new Set(b.catalog.map((item) => item.id));
   const dedupedA = a.catalog.filter((item) => !bIds.has(item.id));
@@ -305,15 +324,19 @@ export async function loadWallTiles(assetsRoot: string): Promise<LoadedWallTiles
   }
 }
 
+export function createWallTilesLoadedMessage(wallTiles: LoadedWallTiles): Record<string, unknown> {
+  return {
+    type: 'wallTilesLoaded',
+    solidSets: wallTiles.solidSets,
+    glassSets: wallTiles.glassSets,
+  };
+}
+
 /**
  * Send wall tiles to webview
  */
 export function sendWallTilesToWebview(webview: vscode.Webview, wallTiles: LoadedWallTiles): void {
-  webview.postMessage({
-    type: 'wallTilesLoaded',
-    solidSets: wallTiles.solidSets,
-    glassSets: wallTiles.glassSets,
-  });
+  webview.postMessage(createWallTilesLoadedMessage(wallTiles));
   console.log(
     `[AssetLoader] Sent ${wallTiles.solidSets.length} solid and ${wallTiles.glassSets.length} glass wall tile set(s) to webview`,
   );
@@ -373,6 +396,15 @@ export async function loadFloorTiles(assetsRoot: string): Promise<LoadedFloorTil
   }
 }
 
+export function createFloorTilesLoadedMessage(
+  floorTiles: LoadedFloorTiles,
+): Record<string, unknown> {
+  return {
+    type: 'floorTilesLoaded',
+    sprites: floorTiles.sprites,
+  };
+}
+
 /**
  * Send floor tiles to webview
  */
@@ -426,6 +458,15 @@ export async function loadCharacterSprites(
     );
     return null;
   }
+}
+
+export function createCharacterSpritesLoadedMessage(
+  charSprites: LoadedCharacterSprites,
+): Record<string, unknown> {
+  return {
+    type: 'characterSpritesLoaded',
+    characters: charSprites.characters,
+  };
 }
 
 /**
