@@ -64,6 +64,15 @@ test('stores backend and host capabilities from hostCapabilitiesLoaded', () => {
   });
 });
 
+test('returns a stable snapshot reference until capabilities change', () => {
+  setCapabilities();
+
+  const first = getHostCapabilitiesSnapshot();
+  const second = getHostCapabilitiesSnapshot();
+
+  assert.strictEqual(second, first);
+});
+
 test('disables the toolbar sessions action when revealing sessions is unsupported', () => {
   setCapabilities({
     hostCapabilities: { revealSessionsRoot: false },

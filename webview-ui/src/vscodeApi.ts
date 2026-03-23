@@ -91,10 +91,7 @@ export function applyHostCapabilitiesMessage(value: unknown): boolean {
 }
 
 export function getHostCapabilitiesSnapshot(): HostCapabilitiesSnapshot {
-  return {
-    backendCapabilities: { ...hostCapabilitiesSnapshot.backendCapabilities },
-    hostCapabilities: { ...hostCapabilitiesSnapshot.hostCapabilities },
-  };
+  return hostCapabilitiesSnapshot;
 }
 
 export function useHostCapabilities(): HostCapabilitiesSnapshot {
