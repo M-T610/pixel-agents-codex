@@ -249,19 +249,6 @@ export class CodexSessionWatcher {
     this.sink({ type: 'agentClosed', id: agentId });
   }
 
-  getSessionFileForAgent(agentId: number): string | undefined {
-    const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
-    if (!session || !fs.existsSync(session.sessionFile)) {
-      return undefined;
-    }
-
-    return session.sessionFile;
-  }
-
-  getSessionsRoot(): string {
-    return this.sessionsRoot;
-  }
-
   private emitRootSnapshot(session: RootSessionState): void {
     for (const toolId of session.activeToolIds) {
       const status = session.activeToolStatuses.get(toolId);

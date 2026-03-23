@@ -16,7 +16,7 @@ import {
   sendFloorTilesToWebview,
   sendWallTilesToWebview,
 } from './assetLoader.js';
-import { CodexSessionWatcher } from './CodexSessionWatcher.js';
+import type { CodexTerminalHost } from './codexTerminal.js';
 import { readConfig, writeConfig } from './configPersistence.js';
 import {
   GLOBAL_KEY_SOUND_ENABLED,
@@ -30,6 +30,8 @@ import {
   watchLayoutFile,
   writeLayoutToFile,
 } from './layoutPersistence.js';
+import { CodexRuntimeAdapter } from './runtime/CodexRuntimeAdapter.js';
+import type { PixelAgentsEvent } from './runtime/contracts.js';
 
 export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   webviewView: vscode.WebviewView | undefined;
@@ -42,7 +44,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
   // Cross-window layout sync
   layoutWatcher: LayoutWatcher | null = null;
-  codexWatcher: CodexSessionWatcher | null = null;
+  codexRuntime: CodexRuntimeAdapter | null = null;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -58,13 +60,33 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     return vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
   }
 
-  private ensureCodexWatcher(): CodexSessionWatcher {
-    if (!this.codexWatcher) {
-      this.codexWatcher = new CodexSessionWatcher(this.workspacePaths, (message) => {
-        this.webview?.postMessage(message);
+  private get codexSessionsRoot(): string {
+    return path.join(os.homedir(), '.codex', 'sessions');
+  }
+
+  private get codexTerminalHost(): CodexTerminalHost {
+    return {
+      getTerminalNames: () => vscode.window.terminals.map((terminal) => terminal.name),
+      createTerminal: (options) => {
+        const terminal = vscode.window.createTerminal(options);
+        return {
+          show: () => terminal.show(),
+          sendText: (command) => terminal.sendText(command),
+        };
+      },
+    };
+  }
+
+  private ensureCodexRuntime(): CodexRuntimeAdapter {
+    if (!this.codexRuntime) {
+      this.codexRuntime = new CodexRuntimeAdapter({
+        workspacePaths: this.workspacePaths,
+        getAgentMeta: () => this.getPersistedAgentMeta(),
+        terminalHost: this.codexTerminalHost,
       });
     }
-    return this.codexWatcher;
+
+    return this.codexRuntime;
   }
 
   private getPersistedAgentMeta(): Record<
@@ -76,24 +98,49 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     >(WORKSPACE_KEY_AGENT_SEATS, {});
   }
 
-  private async revealCodexTranscript(agentId: number): Promise<void> {
-    const sessionFile = this.ensureCodexWatcher().getSessionFileForAgent(agentId);
-    if (!sessionFile) {
-      return;
+  private async connectCodexRuntime(): Promise<void> {
+    const bufferedEvents: PixelAgentsEvent[] = [];
+    let runtimeEventsUnlocked = false;
+
+    await this.ensureCodexRuntime().connect((event) => {
+      if (runtimeEventsUnlocked) {
+        this.webview?.postMessage(event);
+        return;
+      }
+
+      bufferedEvents.push(event);
+    });
+
+    const soundEnabled = this.context.globalState.get<boolean>(GLOBAL_KEY_SOUND_ENABLED, true);
+    const config = readConfig();
+    this.webview?.postMessage({
+      type: 'settingsLoaded',
+      soundEnabled,
+      externalAssetDirectories: config.externalAssetDirectories,
+    });
+
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (wsFolders && wsFolders.length > 1) {
+      this.webview?.postMessage({
+        type: 'workspaceFolders',
+        folders: wsFolders.map((folder) => ({ name: folder.name, path: folder.uri.fsPath })),
+      });
     }
 
-    this.ensureCodexWatcher().selectAgent(agentId);
-    const document = await vscode.workspace.openTextDocument(sessionFile);
-    await vscode.window.showTextDocument(document, { preview: false });
+    await this.loadAssetsAndLayout();
+
+    runtimeEventsUnlocked = true;
+    for (const event of bufferedEvents) {
+      this.webview?.postMessage(event);
+    }
   }
 
   private openCodexSessionsFolder(): void {
-    const sessionsRoot = this.ensureCodexWatcher().getSessionsRoot();
-    if (!fs.existsSync(sessionsRoot)) {
+    if (!fs.existsSync(this.codexSessionsRoot)) {
       return;
     }
 
-    void vscode.env.openExternal(vscode.Uri.file(sessionsRoot));
+    void vscode.env.openExternal(vscode.Uri.file(this.codexSessionsRoot));
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
@@ -105,9 +152,21 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       if (message.type === 'openCodexSessions') {
         this.openCodexSessionsFolder();
       } else if (message.type === 'focusAgent') {
-        await this.revealCodexTranscript(message.id as number);
+        await this.ensureCodexRuntime().dispatch({
+          type: 'select_session',
+          id: message.id as number,
+        });
       } else if (message.type === 'closeAgent') {
-        this.ensureCodexWatcher().hideAgent(message.id as number);
+        await this.ensureCodexRuntime().dispatch({
+          type: 'close_session',
+          id: message.id as number,
+        });
+      } else if (message.type === 'startCodexSession') {
+        await this.ensureCodexRuntime().dispatch({
+          type: 'launch_session',
+          cwd: typeof message.cwd === 'string' ? message.cwd : undefined,
+          bypassPermissions: message.bypassPermissions === true,
+        });
       } else if (message.type === 'saveAgentSeats') {
         console.log(`[Pixel Agents] saveAgentSeats:`, JSON.stringify(message.seats));
         this.context.workspaceState.update(WORKSPACE_KEY_AGENT_SEATS, message.seats);
@@ -117,26 +176,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       } else if (message.type === 'setSoundEnabled') {
         this.context.globalState.update(GLOBAL_KEY_SOUND_ENABLED, message.enabled);
       } else if (message.type === 'webviewReady') {
-        await this.ensureCodexWatcher().start();
-
-        const soundEnabled = this.context.globalState.get<boolean>(GLOBAL_KEY_SOUND_ENABLED, true);
-        const config = readConfig();
-        this.webview?.postMessage({
-          type: 'settingsLoaded',
-          soundEnabled,
-          externalAssetDirectories: config.externalAssetDirectories,
-        });
-
-        const wsFolders = vscode.workspace.workspaceFolders;
-        if (wsFolders && wsFolders.length > 1) {
-          this.webview?.postMessage({
-            type: 'workspaceFolders',
-            folders: wsFolders.map((folder) => ({ name: folder.name, path: folder.uri.fsPath })),
-          });
-        }
-
-        await this.loadAssetsAndLayout();
-        this.codexWatcher?.postSnapshot(this.getPersistedAgentMeta());
+        await this.connectCodexRuntime();
       } else if (message.type === 'exportLayout') {
         const layout = readLayoutFromFile();
         if (!layout) {
@@ -326,8 +366,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose() {
-    this.codexWatcher?.dispose();
-    this.codexWatcher = null;
+    this.codexRuntime?.dispose();
+    this.codexRuntime = null;
     this.layoutWatcher?.dispose();
     this.layoutWatcher = null;
   }

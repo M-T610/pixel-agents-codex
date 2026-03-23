@@ -26,6 +26,7 @@ export interface CodexRuntimeWatcher {
 export interface CodexRuntimeAdapterOptions {
   workspacePaths: string[];
   agentMeta?: Record<string, unknown>;
+  getAgentMeta?: () => Record<string, unknown>;
   terminalHost?: CodexTerminalHost;
   createWatcher?: (listener: (event: PixelAgentsEvent) => void) => CodexRuntimeWatcher;
 }
@@ -66,9 +67,13 @@ export class CodexRuntimeAdapter implements PixelAgentsRuntimeAdapter {
             }
 
             this.deliveryState = 'connected';
-            this.getWatcher().postSnapshot(this.options.agentMeta);
+            this.getWatcher().postSnapshot(this.getAgentMeta());
             this.flushQueuedEvents();
           });
+        })
+        .catch((error) => {
+          this.resetAfterFailedConnect();
+          throw error;
         });
     }
 
@@ -153,6 +158,22 @@ export class CodexRuntimeAdapter implements PixelAgentsRuntimeAdapter {
     return {
       backendCapabilities: this.getCapabilities(),
     };
+  }
+
+  private getAgentMeta(): Record<string, unknown> {
+    return this.options.getAgentMeta?.() ?? this.options.agentMeta ?? {};
+  }
+
+  private resetAfterFailedConnect(): void {
+    this.deliveryState = 'idle';
+    this.connectPromise = null;
+    this.queuedEvents.length = 0;
+    if (this.initialDeliveryTimer) {
+      clearImmediate(this.initialDeliveryTimer);
+      this.initialDeliveryTimer = null;
+    }
+    this.watcher?.dispose();
+    this.watcher = null;
   }
 
   private ensureNotDisposed(): void {

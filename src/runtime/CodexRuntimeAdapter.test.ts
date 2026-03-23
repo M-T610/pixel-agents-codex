@@ -128,6 +128,48 @@ test('dispatch routes launch, select, and close commands through runtime service
   ]);
 });
 
+test('connect retries with a fresh watcher after a startup failure', async () => {
+  const attempts: string[] = [];
+  let watcherCount = 0;
+
+  const adapter = new CodexRuntimeAdapter({
+    workspacePaths: [],
+    createWatcher: () => {
+      watcherCount += 1;
+      const watcherId = watcherCount;
+      return {
+        async start() {
+          attempts.push(`start:${watcherId}`);
+          if (watcherId === 1) {
+            throw new Error('transient failure');
+          }
+        },
+        postSnapshot() {
+          attempts.push(`postSnapshot:${watcherId}`);
+        },
+        selectAgent() {},
+        hideAgent() {},
+        dispose() {
+          attempts.push(`dispose:${watcherId}`);
+        },
+      };
+    },
+  });
+
+  await assert.rejects(
+    adapter.connect(() => {}),
+    /transient failure/,
+  );
+
+  const bootstrap = await adapter.connect(() => {});
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(bootstrap, {
+    backendCapabilities: adapter.getCapabilities(),
+  });
+  assert.deepEqual(attempts, ['start:1', 'dispose:1', 'start:2', 'postSnapshot:2']);
+});
+
 function createWatcherStub(): TestWatcher {
   return {
     async start() {},
