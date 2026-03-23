@@ -21,8 +21,12 @@ export function getSessionDisplayName(
   }
 
   if (workspacePaths.length > 1 && sessionCwd) {
-    return path.basename(sessionCwd);
+    return getWorkspaceFolderName(sessionCwd);
   }
 
   return undefined;
+}
+
+export function getWorkspaceFolderName(sessionCwd?: string): string | undefined {
+  return sessionCwd ? path.basename(sessionCwd) : undefined;
 }

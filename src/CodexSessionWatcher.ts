@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as vscode from 'vscode';
 
+import type { PixelAgentsEvent } from './runtime/contracts.js';
 import { getReadableThreadName, getSessionDisplayName } from './sessionDisplayName.js';
 
 const INDEX_POLL_INTERVAL_MS = 1500;
@@ -63,7 +63,12 @@ interface ThreadSpawnMeta {
   agent_role?: string;
 }
 
-type MessageSink = (message: Record<string, unknown>) => void;
+type MessageSink = (message: PixelAgentsEvent) => void;
+
+export interface CodexSessionWatcherHost {
+  revealTranscript?(sessionFile: string): Promise<void> | void;
+  openSessionsFolder?(sessionsRoot: string): Promise<void> | void;
+}
 
 function parseJson<T>(value: string): T | null {
   try {
@@ -155,6 +160,7 @@ export class CodexSessionWatcher {
   constructor(
     private readonly workspacePaths: string[],
     private readonly sink: MessageSink,
+    private readonly host: CodexSessionWatcherHost = {},
   ) {}
 
   async start(): Promise<void> {
@@ -224,13 +230,25 @@ export class CodexSessionWatcher {
     this.snapshotPosted = true;
   }
 
-  focusAgent(agentId: number): void {
+  selectAgent(agentId: number): void {
     const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
     if (!session || !fs.existsSync(session.sessionFile)) return;
     this.sink({ type: 'agentSelected', id: agentId });
-    void vscode.workspace
-      .openTextDocument(session.sessionFile)
-      .then((document) => vscode.window.showTextDocument(document, { preview: false }));
+  }
+
+  focusAgent(agentId: number): void {
+    const session = [...this.rootSessions.values()].find((item) => item.agentId === agentId);
+    if (!session || !fs.existsSync(session.sessionFile)) return;
+    this.selectAgent(agentId);
+    if (this.host.revealTranscript) {
+      void Promise.resolve(this.host.revealTranscript(session.sessionFile));
+      return;
+    }
+    void import('vscode').then((vscode) =>
+      vscode.workspace
+        .openTextDocument(session.sessionFile)
+        .then((document) => vscode.window.showTextDocument(document, { preview: false })),
+    );
   }
 
   hideAgent(agentId: number): void {
@@ -253,9 +271,18 @@ export class CodexSessionWatcher {
   }
 
   openSessionsFolder(): void {
-    if (fs.existsSync(this.sessionsRoot)) {
-      void vscode.env.openExternal(vscode.Uri.file(this.sessionsRoot));
+    if (!fs.existsSync(this.sessionsRoot)) {
+      return;
     }
+
+    if (this.host.openSessionsFolder) {
+      void Promise.resolve(this.host.openSessionsFolder(this.sessionsRoot));
+      return;
+    }
+
+    void import('vscode').then((vscode) =>
+      vscode.env.openExternal(vscode.Uri.file(this.sessionsRoot)),
+    );
   }
 
   private emitRootSnapshot(session: RootSessionState): void {
