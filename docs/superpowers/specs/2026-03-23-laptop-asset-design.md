@@ -78,7 +78,7 @@ All three variants should use the same underlying model silhouette and behavior.
 The laptop should behave like the current `PC` asset:
 
 - `on` state is animated
-- `off` state is open with a dark screen
+- `off` state follows the exact `PC` model
 - no separate closed-shut state
 
 This keeps it aligned with the existing office “working electronics” language and avoids introducing a parallel state model.
@@ -93,6 +93,12 @@ The laptop should follow the PC-style directional setup:
 - mirrored side handling where appropriate
 
 This ensures the asset reads correctly from different desk placements without requiring a special-case renderer.
+
+The state/orientation matrix should also match `PC` exactly:
+
+- `front` has distinct `off` and animated `on` variants
+- `back` is state-independent
+- `side` is state-independent and uses mirrored side handling where appropriate
 
 ## Visual Direction
 
@@ -132,6 +138,8 @@ and the same pattern for:
 
 - `GRAPHITE`
 - `SILVER`
+
+Only `FRONT` carries `ON/OFF` state suffixes. `BACK` and `SIDE` remain unsuffixed because they are state-independent, matching `PC`.
 
 Recommended manifest structure:
 
