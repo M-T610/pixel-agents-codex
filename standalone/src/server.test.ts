@@ -229,6 +229,94 @@ test('treats standalone-unavailable VS Code actions as explicit no-ops', async (
   }
 });
 
+test('loads persisted layout for standalone bootstrap and saves layout changes through the same store', async () => {
+  const persistedLayout = {
+    version: 1,
+    cols: 4,
+    rows: 3,
+    tiles: [1, 2, 3, 4],
+  };
+  const writes: Array<Record<string, unknown>> = [];
+  const hostChrome = new StandaloneHostChrome({
+    layoutStore: {
+      read() {
+        return persistedLayout;
+      },
+      write(layout: Record<string, unknown>) {
+        writes.push(layout);
+      },
+    },
+  } as never);
+
+  assert.deepEqual(hostChrome.getLayout(), persistedLayout);
+
+  const updatedLayout = {
+    version: 1,
+    cols: 4,
+    rows: 3,
+    tiles: [4, 3, 2, 1],
+  };
+
+  const result = await hostChrome.handleCommand({
+    type: 'saveLayout',
+    layout: updatedLayout,
+  });
+
+  assert.deepEqual(result, {
+    handled: true,
+    events: [],
+    clientEvents: [],
+  });
+  assert.deepEqual(hostChrome.getLayout(), updatedLayout);
+  assert.deepEqual(writes, [updatedLayout]);
+});
+
+test('loads persisted external asset directories for standalone settings and persists removals', async () => {
+  const writes: Array<{ externalAssetDirectories: string[] }> = [];
+  const hostChrome = new StandaloneHostChrome({
+    settingsStore: {
+      read() {
+        return {
+          externalAssetDirectories: ['C:\\assets\\custom', 'D:\\assets\\extra'],
+        };
+      },
+      write(settings: { externalAssetDirectories: string[] }) {
+        writes.push(settings);
+      },
+    },
+  } as never);
+
+  assert.deepEqual(hostChrome.getSettings(), {
+    soundEnabled: true,
+    externalAssetDirectories: ['C:\\assets\\custom', 'D:\\assets\\extra'],
+  });
+
+  const result = await hostChrome.handleCommand({
+    type: 'removeExternalAssetDirectory',
+    path: 'C:\\assets\\custom',
+  });
+
+  assert.deepEqual(result, {
+    handled: true,
+    events: [
+      {
+        type: 'external_asset_directories_changed',
+        dirs: ['D:\\assets\\extra'],
+      },
+    ],
+    clientEvents: [],
+  });
+  assert.deepEqual(hostChrome.getSettings(), {
+    soundEnabled: true,
+    externalAssetDirectories: ['D:\\assets\\extra'],
+  });
+  assert.deepEqual(writes, [
+    {
+      externalAssetDirectories: ['D:\\assets\\extra'],
+    },
+  ]);
+});
+
 test('focusAgent sends agentSelected only to the originating standalone client', async (t) => {
   const server = new StandaloneServer({
     runtime: createNoopRuntime(),
@@ -463,6 +551,27 @@ test('standalone host boots with codex runtime and emits current ui-compatible s
       },
     },
   ]);
+});
+
+test('standalone host loads bundled assets by default so browser bootstrap matches VS Code visuals', async (t) => {
+  const server = new StandaloneServer({
+    runtime: createNoopRuntime(),
+  });
+
+  await server.start();
+  t.after(async () => {
+    await server.stop();
+  });
+
+  assert.ok(server.port !== null);
+
+  const bootstrapMessages = await connectAndReadBootstrap(server.port);
+  const assetsStep = bootstrapMessages.find((message) => message.step === 'assets');
+
+  assert.deepEqual(
+    assetsStep?.payload.messages.map((entry) => entry.type),
+    ['characterSpritesLoaded', 'floorTilesLoaded', 'wallTilesLoaded', 'furnitureAssetsLoaded'],
+  );
 });
 
 async function connectAndReadBootstrap(port: number): Promise<StandaloneBootstrapMessage[]> {

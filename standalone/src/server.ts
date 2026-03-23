@@ -6,12 +6,14 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from 'node:http';
-import { statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Duplex } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import * as assetLoaderModule from '../../src/assetLoader.js';
+import * as configPersistenceModule from '../../src/configPersistence.js';
 import * as webviewMessageBridge from '../../src/host/webviewMessageBridge.js';
 import type {
   HostToWebviewEvent,
@@ -53,6 +55,39 @@ const CodexRuntimeAdapter = (
     ? codexRuntimeAdapterModule.default.CodexRuntimeAdapter
     : undefined
 ) as typeof import('../../src/runtime/CodexRuntimeAdapter.js').CodexRuntimeAdapter;
+const assetLoader = (
+  'default' in assetLoaderModule &&
+  assetLoaderModule.default &&
+  typeof assetLoaderModule.default === 'object'
+    ? assetLoaderModule.default
+    : assetLoaderModule
+) as {
+  loadCharacterSprites: (
+    assetsRoot: string,
+  ) => Promise<import('../../src/assetLoader.js').LoadedCharacterSprites | null>;
+  loadFloorTiles: (
+    assetsRoot: string,
+  ) => Promise<import('../../src/assetLoader.js').LoadedFloorTiles | null>;
+  loadWallTiles: (
+    assetsRoot: string,
+  ) => Promise<import('../../src/assetLoader.js').LoadedWallTiles | null>;
+  loadFurnitureAssets: (
+    assetsRoot: string,
+  ) => Promise<import('../../src/assetLoader.js').LoadedAssets | null>;
+  mergeLoadedAssets: (
+    a: import('../../src/assetLoader.js').LoadedAssets,
+    b: import('../../src/assetLoader.js').LoadedAssets,
+  ) => import('../../src/assetLoader.js').LoadedAssets;
+};
+const configPersistence = (
+  'default' in configPersistenceModule &&
+  configPersistenceModule.default &&
+  typeof configPersistenceModule.default === 'object'
+    ? configPersistenceModule.default
+    : configPersistenceModule
+) as {
+  readConfig: () => { externalAssetDirectories: string[] };
+};
 
 export type WebviewMessage = Record<string, unknown>;
 
@@ -255,7 +290,7 @@ export class StandaloneClientSession {
 export class StandaloneServer {
   private readonly hostChrome: StandaloneHostChrome;
   private readonly workspaceScopeStore: WorkspaceScopeStore;
-  private readonly bootstrapAssets: HostToWebviewEvent[];
+  private bootstrapAssets: HostToWebviewEvent[];
   private readonly clientConnections = new Map<
     SimpleWebSocketConnection,
     StandaloneClientSession
@@ -278,6 +313,10 @@ export class StandaloneServer {
   }
 
   async start(): Promise<void> {
+    if (!this.options.assets) {
+      this.bootstrapAssets = await loadStandaloneAssetBootstrapEvents();
+    }
+
     await this.attachRuntime();
 
     this.httpServer = createServer((request, response) => {
@@ -682,6 +721,53 @@ function getHostBridgePath(): string {
 
 function getStandaloneDirectory(): string {
   return path.dirname(fileURLToPath(import.meta.url));
+}
+
+async function loadStandaloneAssetBootstrapEvents(): Promise<HostToWebviewEvent[]> {
+  try {
+    const assetsRoot = resolveStandaloneAssetsRoot();
+    if (!assetsRoot) {
+      return [];
+    }
+
+    return [
+      {
+        type: 'assets_loaded',
+        characters: await assetLoader.loadCharacterSprites(assetsRoot),
+        floors: await assetLoader.loadFloorTiles(assetsRoot),
+        walls: await assetLoader.loadWallTiles(assetsRoot),
+        furniture: await loadStandaloneFurnitureAssets(assetsRoot),
+      },
+    ];
+  } catch (error) {
+    console.error('[Standalone] Error loading asset bootstrap:', error);
+    return [];
+  }
+}
+
+function resolveStandaloneAssetsRoot(): string | null {
+  const bundledAssetsDir = path.resolve(getStandaloneDirectory(), '..', '..', 'dist', 'assets');
+  if (!existsSync(bundledAssetsDir)) {
+    return null;
+  }
+
+  return path.dirname(bundledAssetsDir);
+}
+
+async function loadStandaloneFurnitureAssets(
+  assetsRoot: string,
+): Promise<import('../../src/assetLoader.js').LoadedAssets | null> {
+  let assets = await assetLoader.loadFurnitureAssets(assetsRoot);
+  const config = configPersistence.readConfig();
+
+  for (const extraDir of config.externalAssetDirectories) {
+    const extraAssets = await assetLoader.loadFurnitureAssets(extraDir);
+    if (extraAssets) {
+      assets = assets ? assetLoader.mergeLoadedAssets(assets, extraAssets) : extraAssets;
+    }
+  }
+
+  return assets;
 }
 
 function createDefaultWorkspaceScopeStore(): WorkspaceScopeStore {

@@ -1,5 +1,7 @@
 import type { HostToWebviewEvent } from '../../src/host/webviewMessageBridge.js';
 import type { HostCapabilities } from '../../src/runtime/contracts.js';
+import * as layoutPersistenceModule from '../../src/layoutPersistence.js';
+import * as configPersistenceModule from '../../src/configPersistence.js';
 
 export interface StandaloneAgentSeat {
   palette?: number;
@@ -12,8 +14,18 @@ export interface StandaloneHostSettings {
   externalAssetDirectories: string[];
 }
 
+export interface StandaloneSettingsStore {
+  read(): { externalAssetDirectories: string[] };
+  write(settings: { externalAssetDirectories: string[] }): void;
+}
+
 export interface StandaloneLayout {
   [key: string]: unknown;
+}
+
+export interface StandaloneLayoutStore {
+  read(): StandaloneLayout | null;
+  write(layout: StandaloneLayout): void;
 }
 
 export type StandaloneBrowserCommand =
@@ -42,7 +54,9 @@ export type StandaloneClientChromeEvent = Extract<HostToWebviewEvent, { type: 's
 export interface StandaloneHostChromeOptions {
   capabilities?: Partial<HostCapabilities>;
   settings?: Partial<StandaloneHostSettings>;
+  settingsStore?: StandaloneSettingsStore;
   layout?: StandaloneLayout | null;
+  layoutStore?: StandaloneLayoutStore;
   persistedAgentMeta?: Record<string, StandaloneAgentSeat>;
 }
 
@@ -60,9 +74,50 @@ const defaultHostCapabilities: HostCapabilities = {
   pickAssetDirectory: false,
 };
 
+const layoutPersistence = (
+  'default' in layoutPersistenceModule &&
+  layoutPersistenceModule.default &&
+  typeof layoutPersistenceModule.default === 'object'
+    ? layoutPersistenceModule.default
+    : layoutPersistenceModule
+) as {
+  readLayoutFromFile: () => StandaloneLayout | null;
+  writeLayoutToFile: (layout: StandaloneLayout) => void;
+};
+const configPersistence = (
+  'default' in configPersistenceModule &&
+  configPersistenceModule.default &&
+  typeof configPersistenceModule.default === 'object'
+    ? configPersistenceModule.default
+    : configPersistenceModule
+) as {
+  readConfig: () => { externalAssetDirectories: string[] };
+  writeConfig: (settings: { externalAssetDirectories: string[] }) => void;
+};
+
+const defaultLayoutStore: StandaloneLayoutStore = {
+  read() {
+    return layoutPersistence.readLayoutFromFile();
+  },
+  write(layout) {
+    layoutPersistence.writeLayoutToFile(layout);
+  },
+};
+
+const defaultSettingsStore: StandaloneSettingsStore = {
+  read() {
+    return configPersistence.readConfig();
+  },
+  write(settings) {
+    configPersistence.writeConfig(settings);
+  },
+};
+
 export class StandaloneHostChrome {
   private readonly capabilities: HostCapabilities;
+  private readonly settingsStore: StandaloneSettingsStore;
   private readonly settings: StandaloneHostSettings;
+  private readonly layoutStore: StandaloneLayoutStore;
   private layout: StandaloneLayout | null;
   private persistedAgentMeta: Record<string, StandaloneAgentSeat>;
 
@@ -71,11 +126,18 @@ export class StandaloneHostChrome {
       ...defaultHostCapabilities,
       ...(options.capabilities ?? {}),
     };
+    this.settingsStore = options.settingsStore ?? defaultSettingsStore;
+    const persistedSettings = this.settingsStore.read();
     this.settings = {
       soundEnabled: options.settings?.soundEnabled ?? true,
-      externalAssetDirectories: [...(options.settings?.externalAssetDirectories ?? [])],
+      externalAssetDirectories: [
+        ...(options.settings?.externalAssetDirectories ??
+          persistedSettings.externalAssetDirectories ??
+          []),
+      ],
     };
-    this.layout = options.layout ?? null;
+    this.layoutStore = options.layoutStore ?? defaultLayoutStore;
+    this.layout = options.layout ?? this.layoutStore.read();
     this.persistedAgentMeta = { ...(options.persistedAgentMeta ?? {}) };
   }
 
@@ -111,6 +173,9 @@ export class StandaloneHostChrome {
         return { handled: true, events: [], clientEvents: [] };
       case 'saveLayout':
         this.layout = isRecord(command.layout) ? { ...command.layout } : null;
+        if (this.layout) {
+          this.layoutStore.write(this.layout);
+        }
         return { handled: true, events: [], clientEvents: [] };
       case 'setSoundEnabled':
         this.settings.soundEnabled = command.enabled === true;
@@ -123,6 +188,9 @@ export class StandaloneHostChrome {
         this.settings.externalAssetDirectories = this.settings.externalAssetDirectories.filter(
           (entry) => entry !== command.path,
         );
+        this.settingsStore.write({
+          externalAssetDirectories: [...this.settings.externalAssetDirectories],
+        });
         return {
           handled: true,
           events: [
