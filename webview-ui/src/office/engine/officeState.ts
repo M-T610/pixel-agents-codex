@@ -13,7 +13,12 @@ import {
   PALETTE_COUNT,
   WAITING_BUBBLE_DURATION_SEC,
 } from '../../constants.js';
-import { getAnimationFrames, getCatalogEntry, getOnStateType } from '../layout/furnitureCatalog.js';
+import {
+  getAnimationFrames,
+  getCatalogEntry,
+  getOnStateType,
+  getOrientationInGroup,
+} from '../layout/furnitureCatalog.js';
 import {
   createDefaultLayout,
   getBlockedTiles,
@@ -33,6 +38,29 @@ import type {
 import { CharacterState, Direction, MATRIX_EFFECT_DURATION, TILE_SIZE } from '../types.js';
 import { createCharacter, updateCharacter } from './characters.js';
 import { matrixEffectSeeds } from './matrixEffect.js';
+
+function isWorkstationFurnitureType(type: string): boolean {
+  return type.startsWith('PC_') || type.startsWith('LAPTOP_');
+}
+
+function getWorkstationSeatFacingDirections(type: string): Direction[] {
+  const orientation = getOrientationInGroup(type) ?? getCatalogEntry(type)?.orientation;
+
+  switch (orientation) {
+    case 'front':
+      return [Direction.UP];
+    case 'back':
+      return [Direction.DOWN];
+    case 'left':
+      return [Direction.LEFT];
+    case 'right':
+    case 'side':
+      return [Direction.RIGHT];
+    default:
+      // Unknown workstation variants fall back to the legacy behavior so they remain usable.
+      return [Direction.UP, Direction.DOWN, Direction.LEFT, Direction.RIGHT];
+  }
+}
 
 export class OfficeState {
   layout: OfficeLayout;
@@ -117,7 +145,7 @@ export class OfficeState {
     // Second pass: assign remaining characters to free seats
     for (const ch of this.characters.values()) {
       if (ch.seatId) continue;
-      const seatId = this.findFreeSeat(true) ?? this.findFreeSeat();
+      const seatId = ch.isActive ? this.findFreeSeat(true) : this.findFreeSeat();
       if (seatId) {
         this.seats.get(seatId)!.assigned = true;
         ch.seatId = seatId;
@@ -131,7 +159,9 @@ export class OfficeState {
     }
 
     for (const ch of this.characters.values()) {
-      this.ensureWorkSeat(ch);
+      if (ch.isActive) {
+        this.ensureWorkSeat(ch);
+      }
     }
 
     // Relocate any characters that ended up outside bounds or on non-walkable tiles
@@ -182,13 +212,22 @@ export class OfficeState {
   }
 
   private getWorkSeatIds(furniture: PlacedFurniture[], seats: Map<string, Seat>): Set<string> {
-    const workstationTiles = new Set<string>();
+    const workstationSeatDirsByTile = new Map<string, Set<Direction>>();
     for (const item of furniture) {
       const entry = getCatalogEntry(item.type);
-      if (!entry || !item.type.startsWith('PC_')) continue;
+      if (!entry || !isWorkstationFurnitureType(item.type)) continue;
+      const validSeatDirs = getWorkstationSeatFacingDirections(item.type);
       for (let dr = 0; dr < entry.footprintH; dr++) {
         for (let dc = 0; dc < entry.footprintW; dc++) {
-          workstationTiles.add(`${item.col + dc},${item.row + dr}`);
+          const key = `${item.col + dc},${item.row + dr}`;
+          let dirs = workstationSeatDirsByTile.get(key);
+          if (!dirs) {
+            dirs = new Set<Direction>();
+            workstationSeatDirsByTile.set(key, dirs);
+          }
+          for (const dir of validSeatDirs) {
+            dirs.add(dir);
+          }
         }
       }
     }
@@ -216,8 +255,9 @@ export class OfficeState {
       for (let depth = 1; depth <= AUTO_ON_FACING_DEPTH && !isWorkSeat; depth++) {
         const baseCol = seat.seatCol + offset.col * depth;
         const baseRow = seat.seatRow + offset.row * depth;
+        const allowedSeatDirs = workstationSeatDirsByTile.get(`${baseCol},${baseRow}`);
 
-        if (workstationTiles.has(`${baseCol},${baseRow}`)) {
+        if (allowedSeatDirs?.has(seat.facingDir)) {
           isWorkSeat = true;
           break;
         }
@@ -225,14 +265,14 @@ export class OfficeState {
         for (let side = 1; side <= AUTO_ON_SIDE_DEPTH && !isWorkSeat; side++) {
           if (offset.col !== 0) {
             if (
-              workstationTiles.has(`${baseCol},${baseRow - side}`) ||
-              workstationTiles.has(`${baseCol},${baseRow + side}`)
+              workstationSeatDirsByTile.get(`${baseCol},${baseRow - side}`)?.has(seat.facingDir) ||
+              workstationSeatDirsByTile.get(`${baseCol},${baseRow + side}`)?.has(seat.facingDir)
             ) {
               isWorkSeat = true;
             }
           } else if (
-            workstationTiles.has(`${baseCol - side},${baseRow}`) ||
-            workstationTiles.has(`${baseCol + side},${baseRow}`)
+            workstationSeatDirsByTile.get(`${baseCol - side},${baseRow}`)?.has(seat.facingDir) ||
+            workstationSeatDirsByTile.get(`${baseCol + side},${baseRow}`)?.has(seat.facingDir)
           ) {
             isWorkSeat = true;
           }
@@ -257,22 +297,35 @@ export class OfficeState {
     return null;
   }
 
-  private ensureWorkSeat(ch: Character): void {
-    if (ch.seatId && this.workSeatIds.has(ch.seatId)) return;
+  private clearSeatAssignment(ch: Character): void {
+    if (!ch.seatId) return;
+    const seat = this.seats.get(ch.seatId);
+    if (seat) seat.assigned = false;
+    ch.seatId = null;
+  }
+
+  private ensureWorkSeat(ch: Character): boolean {
+    if (ch.seatId && this.workSeatIds.has(ch.seatId) && this.seats.has(ch.seatId)) return true;
 
     const workSeatId = this.findFreeSeat(true);
-    if (!workSeatId) return;
-
-    if (ch.seatId) {
-      const oldSeat = this.seats.get(ch.seatId);
-      if (oldSeat) oldSeat.assigned = false;
+    this.clearSeatAssignment(ch);
+    if (!workSeatId) {
+      if (ch.isActive) {
+        ch.state = CharacterState.IDLE;
+        ch.path = [];
+        ch.moveProgress = 0;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+      }
+      return false;
     }
 
     const seat = this.seats.get(workSeatId);
-    if (!seat) return;
+    if (!seat) return false;
 
     seat.assigned = true;
     ch.seatId = workSeatId;
+    return true;
   }
 
   /**
@@ -323,16 +376,16 @@ export class OfficeState {
       hueShift = pick.hueShift;
     }
 
-    // Try preferred seat first, then any free seat
+    // Try preferred work seat first, then any free work seat
     let seatId: string | null = null;
     if (preferredSeatId && this.seats.has(preferredSeatId)) {
       const seat = this.seats.get(preferredSeatId)!;
-      if (!seat.assigned) {
+      if (!seat.assigned && this.workSeatIds.has(preferredSeatId)) {
         seatId = preferredSeatId;
       }
     }
     if (!seatId) {
-      seatId = this.findFreeSeat(true) ?? this.findFreeSeat();
+      seatId = this.findFreeSeat(true);
     }
 
     let ch: Character;
@@ -394,6 +447,7 @@ export class OfficeState {
   reassignSeat(agentId: number, seatId: string): void {
     const ch = this.characters.get(agentId);
     if (!ch) return;
+    if (ch.isActive && !this.workSeatIds.has(seatId)) return;
     // Unassign old seat
     if (ch.seatId) {
       const old = this.seats.get(ch.seatId);
@@ -430,7 +484,14 @@ export class OfficeState {
   sendToSeat(agentId: number): void {
     const ch = this.characters.get(agentId);
     if (!ch) return;
-    this.ensureWorkSeat(ch);
+    if (ch.isActive && !this.ensureWorkSeat(ch)) {
+      ch.state = CharacterState.IDLE;
+      ch.path = [];
+      ch.moveProgress = 0;
+      ch.frame = 0;
+      ch.frameTimer = 0;
+      return;
+    }
     if (!ch.seatId) return;
     const seat = this.seats.get(ch.seatId);
     if (!seat) return;
@@ -499,18 +560,6 @@ export class OfficeState {
         if (d < bestDist) {
           bestDist = d;
           bestSeatId = uid;
-        }
-      }
-    }
-
-    if (!bestSeatId) {
-      for (const [uid, seat] of this.seats) {
-        if (!seat.assigned) {
-          const d = dist(seat.seatCol, seat.seatRow);
-          if (d < bestDist) {
-            bestDist = d;
-            bestSeatId = uid;
-          }
         }
       }
     }

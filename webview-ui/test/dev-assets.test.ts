@@ -82,6 +82,18 @@ async function verifyAssetUrls(baseUrl: string, basePath: string): Promise<void>
   assert.ok(catalog.length > 0, 'furniture catalog should not be empty');
   assert.ok(decodedWalls.solidSets.length > 0, 'decoded solid wall sets should not be empty');
   assert.ok(decodedWalls.glassSets.length > 0, 'decoded glass wall sets should not be empty');
+  assert.ok(
+    catalog.some((entry) => entry.id === 'LAPTOP_BEIGE_FRONT_OFF'),
+    'catalog should include the beige laptop front/off asset',
+  );
+  assert.ok(
+    catalog.some((entry) => entry.id === 'LAPTOP_GRAPHITE_FRONT_OFF'),
+    'catalog should include the graphite laptop front/off asset',
+  );
+  assert.ok(
+    catalog.some((entry) => entry.id === 'LAPTOP_SILVER_FRONT_OFF'),
+    'catalog should include the silver laptop front/off asset',
+  );
 
   await assertUrlOk(assetUrl(baseUrl, basePath, indexedPath('floors', assetIndex.floors[0])));
   await assertUrlOk(assetUrl(baseUrl, basePath, indexedPath('walls', assetIndex.solidWalls[0])));
@@ -89,7 +101,9 @@ async function verifyAssetUrls(baseUrl: string, basePath: string): Promise<void>
   await assertUrlOk(
     assetUrl(baseUrl, basePath, indexedPath('characters', assetIndex.characters[0])),
   );
-  await assertUrlOk(assetUrl(baseUrl, basePath, catalog[0].furniturePath));
+  const laptopAsset = catalog.find((entry) => entry.id === 'LAPTOP_BEIGE_FRONT_OFF');
+  assert.ok(laptopAsset, 'expected beige laptop catalog entry');
+  await assertUrlOk(assetUrl(baseUrl, basePath, laptopAsset.furniturePath));
 
   if (assetIndex.defaultLayout) {
     await assertUrlOk(assetUrl(baseUrl, basePath, assetIndex.defaultLayout));

@@ -12,7 +12,7 @@ The laptop should feel native to the current asset set rather than introducing a
 
 ### In Scope
 
-- a new `LAPTOP` furniture asset family
+- a new laptop furniture set implemented in the current manifest system
 - PC-style orientation variants
 - PC-style `on` and `off` state behavior
 - three separate color variants exposed as separate catalog items
@@ -42,6 +42,8 @@ The closest existing reference is `PC`, which already defines:
 - directional variants
 - animated `on` frames
 - static `off` frame
+- `footprintW: 1`
+- `footprintH: 2`
 
 Small decor props like `COFFEE` are structurally simpler, but they are not the right model for this asset because the requested behavior is explicitly PC-like.
 
@@ -49,7 +51,13 @@ Small decor props like `COFFEE` are structurally simpler, but they are not the r
 
 ### Family Shape
 
-Add the laptop as a `LAPTOP` family under `webview-ui/public/assets/furniture/LAPTOP`.
+Implement the laptop as three sibling families under `webview-ui/public/assets/furniture`:
+
+- `LAPTOP_BEIGE`
+- `LAPTOP_GRAPHITE`
+- `LAPTOP_SILVER`
+
+This is a practical constraint of the current manifest/catalog system: rotation and state behavior are keyed by a single `groupId`, so separate color variants cannot be represented cleanly as sibling subfamilies inside one rotation/state family without loader/catalog changes.
 
 The asset should be:
 
@@ -57,9 +65,9 @@ The asset should be:
 - `canPlaceOnSurfaces: true`
 - `canPlaceOnWalls: false`
 - `footprintW: 1`
-- `footprintH: 1`
+- `footprintH: 2`
 
-This keeps the asset compatible with the current electronics placement model and matches the requested `1x1` footprint expectation.
+This keeps the asset compatible with the current electronics placement model and matches the actual `PC` footprint in the codebase.
 
 ### Variant Strategy
 
@@ -143,29 +151,28 @@ Only `FRONT` carries `ON/OFF` state suffixes. `BACK` and `SIDE` remain unsuffixe
 
 Recommended manifest structure:
 
-- one `LAPTOP` folder
-- one manifest
-- grouped rotation/state/animation tree
-- three sibling color subfamilies inside the same family
+- three sibling folders
+- one manifest per color family
+- each manifest uses the same grouped rotation/state/animation tree
+- all three families share the same silhouette and behavior model
 
-This keeps the asset family together while still exposing separate catalog items.
+This keeps the runtime behavior correct while still exposing separate catalog items and preserving one shared visual design.
 
 ## Approaches Considered
 
-### Approach 1: PC-Style Laptop Family With Separate Color Entries
+### Approach 1: Single `LAPTOP` Family With Separate Color Entries
 
 Create a single `LAPTOP` family that contains three color variants, each with PC-style orientation and state behavior.
 
 Pros:
 
-- best fit with current asset conventions
-- easiest to reason about for future contributors
-- preserves explicit authored visuals
-- keeps runtime behavior predictable
+- best conceptual fit with the original design intent
+- keeps all laptop art in one place
 
 Cons:
 
-- more sprite work than a single recolorable asset
+- does not fit the current manifest/catalog implementation without additional loader/catalog work
+- introduces ambiguity around rotation/state grouping for color variants
 
 ### Approach 2: Single Neutral Laptop Plus Runtime Recoloring
 
@@ -181,34 +188,36 @@ Cons:
 - weaker art control over each finish
 - pushes unnecessary UI/runtime complexity into a simple asset addition
 
-### Approach 3: Three Fully Separate Laptop Families
+### Approach 3: Three Separate Laptop Families With One Shared Visual Design
 
 Create independent beige, graphite, and silver laptop families.
 
 Pros:
 
 - straightforward file-level separation
+- fits the current manifest/catalog implementation cleanly
+- preserves the requested three separate catalog items
 
 Cons:
 
 - more duplication
-- less cohesive asset organization
-- noisier catalog/manifest maintenance
+- slightly noisier asset organization
 
 ## Decision
 
-Adopt Approach 1.
+Adopt Approach 3.
 
-Implement one `LAPTOP` family with three separate color variants, all using the same model shape and PC-style orientation/state behavior.
+Implement `LAPTOP_BEIGE`, `LAPTOP_GRAPHITE`, and `LAPTOP_SILVER` as separate families, all using the same model shape and PC-style orientation/state behavior so they still read as one product family in the catalog.
 
 ## Implementation Shape
 
 Implementation should be done in four slices:
 
 1. Create the `LAPTOP` asset directory and manifest.
-2. Author the sprite set for beige, graphite, and silver variants.
-3. Rebuild assets and verify the laptop appears as separate catalog items.
-4. Smoke-test placement, orientation, and `on/off` animation behavior.
+2. Create the graphite and silver sibling directories and manifests.
+3. Author the sprite set for beige, graphite, and silver variants.
+4. Rebuild assets and verify the laptop appears as separate catalog items.
+5. Smoke-test placement, orientation, and `on/off` animation behavior.
 
 ## Testing
 
@@ -229,5 +238,5 @@ The design is successful if:
 
 - the laptop reads as native to the current office asset set
 - it behaves like the existing PC family
-- the three color variants are clearly distinct but still one model family
+- the three color variants are clearly distinct but still one shared model family
 - the asset fits existing manifest/runtime conventions without special-case code

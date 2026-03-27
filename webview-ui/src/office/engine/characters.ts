@@ -57,7 +57,7 @@ export function createCharacter(
   const center = tileCenter(col, row);
   return {
     id,
-    state: CharacterState.TYPE,
+    state: seat ? CharacterState.TYPE : CharacterState.IDLE,
     dir: seat ? seat.facingDir : Direction.DOWN,
     x: center.x,
     y: center.y,
@@ -98,6 +98,12 @@ export function updateCharacter(
 
   switch (ch.state) {
     case CharacterState.TYPE: {
+      if (ch.isActive && (!ch.seatId || !seats.has(ch.seatId))) {
+        ch.state = CharacterState.IDLE;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+        break;
+      }
       if (ch.frameTimer >= TYPE_FRAME_DURATION_SEC) {
         ch.frameTimer -= TYPE_FRAME_DURATION_SEC;
         ch.frame = (ch.frame + 1) % 2;
@@ -126,8 +132,8 @@ export function updateCharacter(
       // If became active, pathfind to seat
       if (ch.isActive) {
         if (!ch.seatId) {
-          // No seat assigned — type in place
-          ch.state = CharacterState.TYPE;
+          // No workstation seat assigned — remain standing.
+          ch.state = CharacterState.IDLE;
           ch.frame = 0;
           ch.frameTimer = 0;
           break;
@@ -222,8 +228,8 @@ export function updateCharacter(
 
         if (ch.isActive) {
           if (!ch.seatId) {
-            // No seat — type in place
-            ch.state = CharacterState.TYPE;
+            // No workstation seat — remain standing.
+            ch.state = CharacterState.IDLE;
           } else {
             const seat = seats.get(ch.seatId);
             if (seat && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
